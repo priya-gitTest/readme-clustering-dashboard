@@ -885,10 +885,12 @@ def show_repository_browser():
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("**Top 5 Languages**")
-        top_langs = filtered_df['language'].value_counts().head(5)
-        for lang, count in top_langs.items():
-            st.write(f"- **{lang}**: {count} repos")
+        st.markdown("**Repository Sources**")
+        # Parse domains from URLs
+        filtered_df['domain'] = filtered_df['url'].apply(lambda x: urlparse(x).netloc if pd.notna(x) else 'Unknown')
+        top_domains = filtered_df['domain'].value_counts().head(5)
+        for domain, count in top_domains.items():
+            st.write(f"- **{domain}**: {count} repos")
     
     with col2:
         st.markdown("**Top 5 Licenses**")
