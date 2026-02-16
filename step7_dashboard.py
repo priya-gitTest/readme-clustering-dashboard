@@ -6,6 +6,7 @@ import streamlit as st
 #"""
 
 import os
+from urllib.parse import urlparse
 
 # CRITICAL: Read database URL from Streamlit secrets
 if 'DATABASE_URL' in st.secrets:
