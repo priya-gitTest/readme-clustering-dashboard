@@ -2,7 +2,7 @@
 import streamlit as st
 st.write("✅ Dashboard is loading!")
 """
-Research Dashboard: README Header Clustering + License Analysis
+Dashboard: README Header Clustering + License Analysis
 """
 
 import os
@@ -20,7 +20,7 @@ import numpy as np
 # ... (rest of the imports and code from step7_dashboard.py)
 #!/usr/bin/env python3
 """
-Research Dashboard: README Header Clustering Analysis
+Dashboard: README Header Clustering + License Analysis
 Interactive visualization and exploration of clustering results
 """
 import streamlit as st
@@ -187,6 +187,28 @@ def categorize_license(license_name):
     return 'Other'
 
 @st.cache_data
+def load_repository_details():
+    """Load detailed repository information"""
+    session = get_db_session()
+    
+    repos = session.query(Repository).all()
+    
+    repo_data = []
+    for repo in repos:
+        license_info = repo.license_from_api if hasattr(repo, 'license_from_api') else None
+        
+        repo_data.append({
+            'name': repo.name,
+            'url': repo.url,
+            'license': license_info if license_info and license_info != 'NOASSERTION' else 'No License',
+            'stars': repo.stars if hasattr(repo, 'stars') else 0,
+            'description': repo.description[:100] + '...' if hasattr(repo, 'description') and repo.description and len(repo.description) > 100 else (repo.description if hasattr(repo, 'description') else ''),
+            'language': repo.primary_language if hasattr(repo, 'primary_language') else 'Unknown',
+        })
+    
+    return pd.DataFrame(repo_data)
+
+@st.cache_data
 def load_embeddings_for_viz(max_samples=5000):
     """Load embeddings for visualization (sample if too large)"""
     session = get_db_session()
@@ -258,14 +280,14 @@ def main():
     """Main dashboard"""
     
     # Header
-    st.markdown('<div class="main-header">📊 README Header Clustering Analysis</div>', 
+    st.markdown('<div class="main-header">📊 README Header Clustering + License Analysis</div>', 
                 unsafe_allow_html=True)
     
     # Sidebar
     st.sidebar.title("Navigation")
     page = st.sidebar.radio(
         "Select Page",
-        ["Overview", "Cluster Explorer", "License Analysis", "Visualization", "Search", "Export"]
+        ["Overview", "Cluster Explorer", "License Analysis","Repository Browser", "Visualization", "Search", "Export"]
     )
     
     # Load data
@@ -294,7 +316,7 @@ def main():
     If you use this work, please cite:
     ```
     [Priyanka O] (2026)
-    README Header Clustering Analysis
+    README Header Clustering + License Analysis
     AI-Assisted Code Metadata Pipeline
     ```
     
@@ -308,6 +330,8 @@ def main():
         show_cluster_explorer(stats.get('run_id'))
     elif page == "License Analysis":
         show_license_analysis()
+    elif page == "Repository Browser":
+        show_repository_browser()
     elif page == "Visualization":
         show_visualization()
     elif page == "Search":
@@ -734,6 +758,143 @@ def show_license_analysis():
         file_name="license_analysis.csv",
         mime="text/csv"
     )
+
+def show_repository_browser():
+    """Repository browser page"""
+    st.header("📚 Repository Browser")
     
+    st.markdown("""
+    Browse all repositories analyzed in this study. 
+    View licenses, descriptions, and verify the dataset used for clustering analysis.
+    """)
+    
+    repo_df = load_repository_details()
+    
+    # Statistics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total Repositories", f"{len(repo_df):,}")
+    
+    with col2:
+        with_license = len(repo_df[repo_df['license'] != 'No License'])
+        st.metric("With License", f"{with_license:,}")
+    
+    with col3:
+        languages = repo_df['language'].nunique()
+        st.metric("Programming Languages", languages)
+    
+    with col4:
+        total_stars = repo_df['stars'].sum()
+        st.metric("Total Stars", f"{total_stars:,}")
+    
+    st.markdown("---")
+    
+    # Filters
+    st.subheader("🔍 Filters")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # License filter
+        all_licenses = ['All'] + sorted(repo_df['license'].unique().tolist())
+        selected_license = st.selectbox("License", all_licenses)
+    
+    with col2:
+        # Language filter
+        all_languages = ['All'] + sorted(repo_df['language'].unique().tolist())
+        selected_language = st.selectbox("Language", all_languages)
+    
+    with col3:
+        # Search
+        search_term = st.text_input("Search by name", "")
+    
+    # Apply filters
+    filtered_df = repo_df.copy()
+    
+    if selected_license != 'All':
+        filtered_df = filtered_df[filtered_df['license'] == selected_license]
+    
+    if selected_language != 'All':
+        filtered_df = filtered_df[filtered_df['language'] == selected_language]
+    
+    if search_term:
+        filtered_df = filtered_df[
+            filtered_df['name'].str.contains(search_term, case=False, na=False)
+        ]
+    
+    # Sort options
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        st.markdown(f"**Showing {len(filtered_df):,} of {len(repo_df):,} repositories**")
+    
+    with col2:
+        sort_by = st.selectbox("Sort by", ["Name", "Stars", "License"])
+    
+    # Sort
+    if sort_by == "Name":
+        filtered_df = filtered_df.sort_values('name')
+    elif sort_by == "Stars":
+        filtered_df = filtered_df.sort_values('stars', ascending=False)
+    elif sort_by == "License":
+        filtered_df = filtered_df.sort_values('license')
+    
+    st.markdown("---")
+    
+    # Display as table
+    st.subheader("📋 Repository List")
+    
+    # Make URL clickable
+    display_df = filtered_df[['name', 'license', 'language', 'stars', 'url']].head(500)
+    
+    st.dataframe(
+        display_df,
+        column_config={
+            "name": st.column_config.TextColumn("Repository", width="medium"),
+            "license": st.column_config.TextColumn("License", width="medium"),
+            "language": st.column_config.TextColumn("Language", width="small"),
+            "stars": st.column_config.NumberColumn("⭐ Stars", width="small"),
+            "url": st.column_config.LinkColumn("Link", width="medium"),
+        },
+        hide_index=True,
+        use_container_width=True,
+        height=600
+    )
+    
+    if len(filtered_df) > 500:
+        st.info(f"💡 Showing first 500 results. Use filters to narrow down.")
+    
+    st.markdown("---")
+    
+    # Export filtered results
+    st.subheader("📥 Export Filtered Results")
+    
+    csv = filtered_df.to_csv(index=False)
+    st.download_button(
+        label=f"Download {len(filtered_df)} Repositories (CSV)",
+        data=csv,
+        file_name="repository_list.csv",
+        mime="text/csv"
+    )
+    
+    # Summary statistics
+    st.markdown("---")
+    st.subheader("📊 Quick Stats")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Top 5 Languages**")
+        top_langs = filtered_df['language'].value_counts().head(5)
+        for lang, count in top_langs.items():
+            st.write(f"- **{lang}**: {count} repos")
+    
+    with col2:
+        st.markdown("**Top 5 Licenses**")
+        top_licenses = filtered_df['license'].value_counts().head(5)
+        for lic, count in top_licenses.items():
+            st.write(f"- **{lic}**: {count} repos")
+
 if __name__ == "__main__":
     main()
