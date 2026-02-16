@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 import streamlit as st
-st.write("✅ Dashboard is loading!")
-"""
-Dashboard: README Header Clustering + License Analysis
-"""
+#st.write("✅ Dashboard is loading!")
+#"""
+#Dashboard: README Header Clustering + License Analysis
+#"""
 
 import os
 
@@ -19,9 +19,9 @@ import pandas as pd
 import numpy as np
 # ... (rest of the imports and code from step7_dashboard.py)
 #!/usr/bin/env python3
-"""
-Dashboard: README Header Clustering + License Analysis
-Interactive visualization and exploration of clustering results
+#"""
+#Dashboard: README Header Clustering + License Analysis
+#Interactive visualization and exploration of clustering results
 """
 import streamlit as st
 import pandas as pd
