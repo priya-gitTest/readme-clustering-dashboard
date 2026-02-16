@@ -319,3 +319,14 @@ class RepositoryHistory(Base):
         Index("idx_history_run", "run_id"),
         Index("idx_history_repo_run", "repository_id", "run_id"),
     )
+
+class ProcessingMetadata(Base):
+    """Track processing pipeline metadata and statistics"""
+    __tablename__ = 'processing_metadata'
+    
+    id = Column(Integer, primary_key=True)
+    stage = Column(String(100), nullable=False, unique=True)
+    count = Column(Integer, nullable=False)
+    description = Column(Text)
+    processed_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -146,6 +146,41 @@ def load_cluster_data(run_id=None):
     return pd.DataFrame(cluster_data)
 
 @st.cache_data
+def load_processing_metadata():
+    """Load processing pipeline metadata from database"""
+    session = get_db_session()
+    
+    try:
+        result = session.execute(text("""
+            SELECT stage, count, description 
+            FROM processing_metadata 
+            ORDER BY count DESC
+        """))
+        
+        metadata = {}
+        for row in result:
+            metadata[row.stage] = {
+                'count': row.count,
+                'description': row.description
+            }
+        
+        if not metadata:
+            st.warning("⚠️ Processing metadata is empty. Data Quality page may show incomplete information.")
+        
+        return metadata
+        
+    except Exception as e:
+        st.error(f"""
+        ⚠️ **Processing metadata not available**
+        
+        Error: {e}
+        
+        The `processing_metadata` table doesn't exist in the database.
+        Please run the setup script in the main repository to create it.
+        """)
+        return {}
+
+@st.cache_data
 def load_license_data():
     """Load license information"""
     session = get_db_session()
