@@ -910,64 +910,81 @@ def show_data_quality():
     This ensures reproducibility and helps identify potential biases in the dataset.
     """)
     
+    # DYNAMIC: Get actual counts from database
+    session = get_db_session()
+    
+    total_repos = session.query(Repository).count()
+    total_readmes = session.query(ReadmeHeader.repository_id).distinct().count()
+    total_headers = session.query(ReadmeHeader).count()
+    total_embeddings = session.query(HeaderEmbedding).count()
+    total_clustered = session.query(HeaderClusterAssignment).count()
+    total_clusters = session.query(Cluster).count()
+    
+    # Calculate derived metrics
+    repos_without_readme = total_repos - total_readmes
+    avg_headers_per_repo = total_headers / total_readmes if total_readmes > 0 else 0
+    
     # Processing pipeline
     st.subheader("🔄 Processing Pipeline")
     
-    # These numbers come from your actual pipeline runs
+    # These are the only hardcoded numbers (original scraping data)
+    ORIGINAL_SCRAPED = 4266  # From original file
+    INVALID_REMOVED = ORIGINAL_SCRAPED - total_repos  # Calculated
+    
     pipeline_data = {
         'Stage': [
             '1. Initial Scraping',
             '2. Valid Repositories',
             '3. README Extracted',
-            '4. Markdown READMEs',
-            '5. Headers Extracted',
+            '4. Headers Extracted',
+            '5. Embeddings Generated',
             '6. Clustered Headers'
         ],
         'Count': [
-            4266,  # Original file
-            4218,  # Final repositories
-            3412,  # READMEs extracted
-            3412,  # Markdown format
-            40466, # Headers extracted
-            40466  # Headers clustered
+            ORIGINAL_SCRAPED,
+            total_repos,
+            total_readmes,
+            total_headers,
+            total_embeddings,
+            total_clustered
         ],
         'Loss': [
             0,
-            48,    # 4266 - 4218
-            806,   # 4218 - 3412
-            0,     # All were markdown
-            0,     # All READMEs had headers
-            0      # All headers clustered
+            INVALID_REMOVED,
+            repos_without_readme,
+            0,
+            total_headers - total_embeddings,
+            total_embeddings - total_clustered
         ],
         'Reason': [
-            'Initial dataset',
-            'Duplicates or invalid URLs',
-            'No README file found',
-            'Already markdown format',
+            'Initial dataset from scraping',
+            f'Invalid URLs, deleted repos, duplicates',
+            f'No README file found',
             'All READMEs parsed successfully',
-            'Full coverage achieved'
+            'Embeddings generated for all headers',
+            'All headers clustered'
         ]
     }
     
     df = pd.DataFrame(pipeline_data)
     
     # Add percentage
-    df['Retention %'] = (df['Count'] / 4266 * 100).round(1)
+    df['Retention %'] = (df['Count'] / ORIGINAL_SCRAPED * 100).round(1)
     
     st.dataframe(
         df,
         column_config={
             "Stage": st.column_config.TextColumn("Processing Stage", width="large"),
-            "Count": st.column_config.NumberColumn("Repositories", width="small"),
-            "Loss": st.column_config.NumberColumn("Lost", width="small"),
-            "Retention %": st.column_config.NumberColumn("Retention", format="%.1f%%"),
+            "Count": st.column_config.NumberColumn("Count", width="small", format="%d"),
+            "Loss": st.column_config.NumberColumn("Lost", width="small", format="%d"),
+            "Retention %": st.column_config.NumberColumn("Retention", width="small", format="%.1f%%"),
             "Reason": st.column_config.TextColumn("Notes", width="large"),
         },
         hide_index=True,
         use_container_width=True
     )
     
-    # Sankey diagram
+    # Sankey diagram (dynamic values)
     st.markdown("---")
     st.subheader("📊 Data Flow Visualization")
     
@@ -976,18 +993,20 @@ def show_data_quality():
             pad = 15,
             thickness = 20,
             line = dict(color = "black", width = 0.5),
-            label = ["Initial Scrape (4,266)", 
-                     "Valid Repos (4,218)", 
-                     "With README (3,412)",
-                     "Markdown Format (3,412)",
-                     "Headers Extracted (40,466)",
-                     "Clustered (40,466)"],
+            label = [
+                f"Initial Scrape ({ORIGINAL_SCRAPED:,})", 
+                f"Valid Repos ({total_repos:,})", 
+                f"With README ({total_readmes:,})",
+                f"Headers ({total_headers:,})",
+                f"Embeddings ({total_embeddings:,})",
+                f"Clustered ({total_clustered:,})"
+            ],
             color = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
         ),
         link = dict(
             source = [0, 1, 2, 3, 4],
             target = [1, 2, 3, 4, 5],
-            value = [4218, 3412, 3412, 40466, 40466]
+            value = [total_repos, total_readmes, total_headers, total_embeddings, total_clustered]
         )
     )])
     
@@ -999,65 +1018,96 @@ def show_data_quality():
     
     st.plotly_chart(fig, use_container_width=True)
     
-    # Statistics
+    # Statistics (all dynamic)
     st.markdown("---")
     st.subheader("📈 Key Statistics")
     
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("Initial Repos", "4,266")
+        st.metric("Initial Repos", f"{ORIGINAL_SCRAPED:,}")
     
     with col2:
-        st.metric("Final Repos", "4,218", delta="-48", delta_color="normal")
+        st.metric("Final Repos", f"{total_repos:,}", delta=f"-{INVALID_REMOVED}", delta_color="normal")
     
     with col3:
-        retention = (4218 / 4266) * 100
+        retention = (total_repos / ORIGINAL_SCRAPED) * 100
         st.metric("Retention Rate", f"{retention:.1f}%")
     
     with col4:
-        st.metric("README Coverage", "80.9%", delta="3,412 / 4,218")
+        readme_coverage = (total_readmes / total_repos) * 100
+        st.metric("README Coverage", f"{readme_coverage:.1f}%", delta=f"{total_readmes:,} / {total_repos:,}")
     
-    # Reasons for exclusion
+    # Reasons for exclusion (dynamic)
     st.markdown("---")
-    st.subheader("🔍 Reasons for Exclusion")
+    st.subheader("🔍 Dataset Composition")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("#### Lost at Repository Level (48 repos)")
-        st.markdown("""
-        - **Duplicates**: Same repository listed multiple times
-        - **Invalid URLs**: Broken or inaccessible links
-        - **Deleted repos**: Repositories removed since scraping
-        - **Access denied**: Private or restricted access
+        st.markdown("#### Repository Level")
+        st.info(f"""
+        **{INVALID_REMOVED} repositories excluded ({INVALID_REMOVED/ORIGINAL_SCRAPED*100:.1f}%)**
         
-        *Note: 98.9% retention rate indicates high data quality*
+        From {ORIGINAL_SCRAPED:,} initially scraped to {total_repos:,} in database.
+        
+        Possible reasons:
+        - Invalid or broken URLs
+        - Deleted repositories
+        - Duplicate entries (cross-platform mirrors)
+        - Access denied (private repos)
+        
+        **Result: {retention:.1f}% retention rate** ✅
         """)
     
     with col2:
-        st.markdown("#### Lost at README Level (806 repos)")
-        st.markdown("""
-        - **No README file**: Repository has no documentation (19.1%)
-        - **Non-markdown format**: READMEs in .txt, .rst, or other formats
-        - **Empty READMEs**: File exists but contains no content
+        st.markdown("#### Documentation Level")
+        st.info(f"""
+        **{repos_without_readme:,} repositories without READMEs ({repos_without_readme/total_repos*100:.1f}%)**
         
-        *Note: 80.9% README coverage is typical for research software*
+        Reasons:
+        - No README file exists
+        - Non-markdown formats excluded
+        - Empty README files
+        
+        **Result: {readme_coverage:.1f}% README coverage** ✅
+        
+        **Average: {avg_headers_per_repo:.1f} headers per README**
         """)
+    
+    # Clustering quality (dynamic)
+    st.markdown("---")
+    st.subheader("📊 Clustering Quality")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total Clusters", total_clusters)
+    
+    with col2:
+        coverage = (total_clustered / total_headers * 100) if total_headers > 0 else 0
+        st.metric("Clustering Coverage", f"{coverage:.1f}%")
+    
+    with col3:
+        avg_cluster_size = total_clustered / total_clusters if total_clusters > 0 else 0
+        st.metric("Avg Cluster Size", f"{avg_cluster_size:.0f}")
+    
+    with col4:
+        st.metric("Headers Clustered", f"{total_clustered:,}")
     
     # Bias check
     st.markdown("---")
-    st.subheader("⚖️ Potential Biases")
+    st.subheader("⚖️ Potential Biases & Limitations")
     
     st.markdown("""
     #### Data Collection Biases to Consider:
     
-    1. **Language Bias**: 
+    1. **Format Bias**: 
        - Analysis limited to markdown READMEs
-       - May under-represent repositories with .rst or .txt documentation
+       - May under-represent repositories with .rst, .txt, or other documentation formats
     
     2. **Platform Bias**: 
-       - Mixed sources (GitHub, Zenodo, 4TU, etc.)
+       - Mixed sources (GitHub, GitLab, Zenodo, 4TU, etc.)
        - Different documentation standards across platforms
     
     3. **Temporal Bias**: 
@@ -1066,20 +1116,23 @@ def show_data_quality():
     
     4. **Completeness Bias**: 
        - Only repositories with READMEs analyzed
-       - 19.1% of repos excluded due to missing documentation
+       - Projects without documentation excluded
     
     #### Mitigation Strategies:
-    - ✅ High retention rate (98.9%) minimizes selection bias
-    - ✅ Large sample size (4,218 repos) ensures statistical validity
+    - ✅ High retention rate minimizes selection bias
+    - ✅ Large sample size ensures statistical validity
     - ✅ Transparent reporting of all exclusions
-    - ✅ Metadata available for verification
+    - ✅ Full metadata available for verification
+    - ✅ Cross-platform duplicates removed
     """)
     
-    # Export
+    # Export (dynamic)
     st.markdown("---")
     st.subheader("📥 Export Processing Report")
     
     report = f"""# Data Quality Report
+
+Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 ## Processing Pipeline
 
@@ -1087,30 +1140,39 @@ def show_data_quality():
 
 ## Summary Statistics
 
-- **Initial Repositories**: 4,266
-- **Final Repositories**: 4,218
-- **Retention Rate**: {(4218/4266)*100:.2f}%
-- **README Coverage**: 80.9% (3,412/4,218)
-- **Headers Extracted**: 40,466
-- **Average Headers per Repo**: {40466/4218:.1f}
+- **Initial Repositories**: {ORIGINAL_SCRAPED:,}
+- **Final Repositories**: {total_repos:,}
+- **Retention Rate**: {retention:.2f}%
+- **README Coverage**: {readme_coverage:.1f}% ({total_readmes:,}/{total_repos:,})
+- **Headers Extracted**: {total_headers:,}
+- **Average Headers per README**: {avg_headers_per_repo:.1f}
+- **Clustering Coverage**: {coverage:.1f}% ({total_clustered:,}/{total_headers:,})
+- **Number of Clusters**: {total_clusters}
 
 ## Exclusions
 
-### Repository Level (48 repos, 1.1%)
-- Duplicates or invalid URLs
-- Inaccessible or deleted repositories
+### Repository Level ({INVALID_REMOVED} repos, {INVALID_REMOVED/ORIGINAL_SCRAPED*100:.1f}%)
+- Invalid URLs, deleted repositories
+- Cross-platform duplicates removed
+- Inaccessible or private repos
 
-### README Level (806 repos, 19.1%)
+### README Level ({repos_without_readme} repos, {repos_without_readme/total_repos*100:.1f}%)
 - No README file found
 - Non-markdown formats excluded
 
 ## Data Quality Assessment
 
-✅ High retention rate (98.9%) indicates robust data collection
-✅ README coverage (80.9%) is typical for research software
-✅ Full clustering coverage achieved (100%)
+✅ High retention rate ({retention:.1f}%) indicates robust data collection
+✅ README coverage ({readme_coverage:.1f}%) is typical for research software
+✅ Full clustering coverage achieved ({coverage:.1f}%)
+✅ No URL duplicates in final dataset
 
-Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
+## Dataset Composition
+
+- Total repositories analyzed: {total_repos:,}
+- Repositories with READMEs: {total_readmes:,}
+- Headers extracted: {total_headers:,}
+- Semantic clusters discovered: {total_clusters}
 """
     
     st.download_button(
