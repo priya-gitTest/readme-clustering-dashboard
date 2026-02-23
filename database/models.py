@@ -24,27 +24,39 @@ Base = declarative_base()
 
 
 class Repository(Base):
-    """Main repository metadata table"""
+    """Main repository metadata table - CORRECTED to match actual DB schema"""
 
     __tablename__ = "repositories"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     url = Column(String(500), unique=True, nullable=False, index=True)
     name = Column(String(255), nullable=False)
-    platform = Column(String(50), nullable=False)  # github, gitlab, bitbucket
     owner = Column(String(255))
+    platform = Column(String(50))  # github, gitlab, bitbucket
     description = Column(Text)
     language = Column(String(100))
     stars = Column(Integer, default=0)
     forks = Column(Integer, default=0)
+    license_from_api = Column(String(100))
     readme_content = Column(Text)
     readme_format = Column(String(20), default="markdown")  # markdown, rst, txt
-    license_from_api = Column(String(100))
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    last_scraped_at = Column(DateTime)
-    scrape_status = Column(String(20), default="pending")  # pending, success, failed
+    scrape_status = Column(String(20), default="success")
     scrape_error = Column(Text)
+    
+    # Timestamp - actual DB uses scraped_at (not created_at/updated_at/last_scraped_at)
+    scraped_at = Column(DateTime)
+
+    # Source tracking (which CSV / input file this repo came from)
+    source = Column(Text)
+
+    # License compliance columns (from migration 001_license_compliance_columns.sql)
+    license_spdx_ok = Column(Boolean)
+    license_filename = Column(Text)
+    license_note = Column(Text)
+
+    # License enrichment columns (from migration 002_license_category_source.sql)
+    license_category = Column(String(30))  # Permissive/WeakCopyleft/StrongCopyleft/PublicDomain/NonOSS/Custom/NoLicense/Other
+    license_source   = Column(String(30))  # github_api / spdx_header / file_scan
 
     # Relationships
     headers = relationship("ReadmeHeader", back_populates="repository", cascade="all, delete-orphan")
@@ -90,8 +102,9 @@ class ReadmeHeader(Base):
     repository_id = Column(Integer, ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False)
     header_text = Column(Text, nullable=False)
     level = Column(Integer, nullable=False)  # 1-6 for H1-H6
-    normalized_text = Column(String(500), index=True)
-    position = Column(Integer)  # Position in README (order)
+    normalized_text = Column(Text, index=True)
+    position = Column(Integer, default=0)  # Position in README (order)
+    has_content = Column(Boolean, default=False)  # TRUE if section has non-empty body
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships
@@ -100,6 +113,7 @@ class ReadmeHeader(Base):
     cluster_assignment = relationship("HeaderClusterAssignment", back_populates="header", uselist=False, cascade="all, delete-orphan")
 
     __table_args__ = (
+        Index("idx_readme_headers_repo", "repository_id"),
         Index("idx_header_level", "level"),
         Index("idx_header_normalized", "normalized_text"),
     )
@@ -273,7 +287,7 @@ class RepositoryLicense(Base):
     license = relationship("License", back_populates="repository_licenses")
 
     __table_args__ = (
-        Index("idx_repo_license", "repository_id", "license_id"),
+        Index("idx_repo_license_join", "repository_id", "license_id"),
         Index("idx_license_source", "source"),
     )
 
@@ -323,10 +337,85 @@ class RepositoryHistory(Base):
 class ProcessingMetadata(Base):
     """Track processing pipeline metadata and statistics"""
     __tablename__ = 'processing_metadata'
-    
+
     id = Column(Integer, primary_key=True)
     stage = Column(String(100), nullable=False, unique=True)
     count = Column(Integer, nullable=False)
     description = Column(Text)
     processed_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class SomefResult(Base):
+    """SOMEF metadata extraction results (Step 8 — optional validation).
+
+    Each row holds the structured output of running SOMEF on a repository's
+    README.  The per-category columns store JSON arrays of the form:
+        [{"excerpt": "<text>", "confidence": 0.9}, ...]
+    so the full detail is preserved while remaining queryable.
+    """
+
+    __tablename__ = "somef_results"
+
+    id              = Column(Integer, primary_key=True, autoincrement=True)
+    repository_id   = Column(Integer, ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False)
+    run_date        = Column(DateTime, default=datetime.utcnow)
+    somef_version   = Column(String(20))
+
+    # SOMEF extraction categories (JSON: [{excerpt, confidence}])
+    description     = Column(Text)
+    installation    = Column(Text)
+    invocation      = Column(Text)
+    citation        = Column(Text)
+    requirement     = Column(Text)
+    documentation   = Column(Text)
+    contributor     = Column(Text)
+    license         = Column(Text)
+    usage           = Column(Text)
+    acknowledgement = Column(Text)
+    run             = Column(Text)
+    support         = Column(Text)
+
+    categories_found    = Column(Text)   # JSON list of detected category names
+    processing_time_s   = Column(Float)
+    error               = Column(Text)   # NULL on success
+
+    # Relationship
+    repository = relationship("Repository", backref="somef_results")
+
+    __table_args__ = (
+        UniqueConstraint("repository_id", name="uq_somef_repo"),
+        Index("idx_somef_repo", "repository_id"),
+    )
+
+
+class ExcludedRepository(Base):
+    """Audit log of every URL filtered out during the pipeline, with reason and stage.
+
+    Lifecycle:
+    - is_retryable=True  → re-attempted on the next run (e.g. 404, timeout, scraping exception)
+    - is_retryable=False → permanent exclusion, never retried (e.g. unknown platform, bad URL)
+    - resolved_at        → set when the URL is later successfully scraped; row kept for audit trail
+    Multiple rows per URL are allowed (one per exclusion event across runs).
+    """
+
+    __tablename__ = "excluded_repositories"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    url = Column(Text, nullable=False)
+    exclusion_reason = Column(String(255), nullable=False)  # e.g. 'Repository not found (404)'
+    exclusion_stage = Column(String(100), nullable=False, default="scraping")  # scraping | validation
+    notes = Column(Text)
+    excluded_at = Column(DateTime, default=datetime.utcnow)
+    source = Column(Text)  # which CSV / input file this URL came from
+
+    # Retry management
+    is_retryable = Column(Boolean, default=True)   # False for permanent errors (unknown platform, bad URL)
+    resolved_at  = Column(DateTime)                # Set when URL is successfully scraped in a later run
+
+    __table_args__ = (
+        Index("idx_excluded_url", "url"),
+        Index("idx_excluded_reason", "exclusion_reason"),
+        Index("idx_excluded_stage", "exclusion_stage"),
+        Index("idx_excluded_retryable", "is_retryable", "resolved_at"),
+    )
