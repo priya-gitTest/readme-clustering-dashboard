@@ -281,7 +281,7 @@ def show_overview(stats):
         st.metric(
             label="Headers Extracted",
             value=f"{stats['total_headers']:,}",
-            delta=f"{stats['total_headers']/stats['total_repos']:.1f} per repo"
+            delta=f"{stats['total_headers']/stats['total_repos']:.1f} per repo" if stats['total_repos'] > 0 else "0.0 per repo"
         )
     
     with col3:
@@ -543,11 +543,11 @@ def show_export(run_id):
 ### Dataset
 - **Repositories Analyzed:** {stats['total_repos']:,}
 - **Headers Extracted:** {stats['total_headers']:,}
-- **Average Headers per Repository:** {stats['total_headers']/stats['total_repos']:.1f}
+- **Average Headers per Repository:** {stats['total_headers']/stats['total_repos']:.1f if stats['total_repos'] > 0 else 0.0}
 
 ### Clustering Results
 - **Number of Clusters:** {stats['total_clusters']}
-- **Headers Clustered:** {stats['total_assignments']:,} ({stats['total_assignments']/stats['total_headers']*100:.1f}%)
+- **Headers Clustered:** {stats['total_assignments']:,} ({stats['total_assignments']/stats['total_headers']*100:.1f if stats['total_headers'] > 0 else 0.0}%)
 - **Average Cluster Size:** {cluster_df['size'].mean():.0f}
 - **Median Cluster Size:** {cluster_df['size'].median():.0f}
 
