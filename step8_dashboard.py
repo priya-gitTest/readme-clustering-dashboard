@@ -11,6 +11,7 @@ import plotly.graph_objects as go
 from pathlib import Path
 import sys
 import json
+from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -126,6 +127,64 @@ def load_cluster_data(run_id=None):
 
 
 @st.cache_data
+def load_license_data():
+    """Load per-repo license information from the repositories table."""
+    session = get_db_session()
+    repos = session.query(Repository).all()
+    rows = []
+    for repo in repos:
+        lic = getattr(repo, 'license_from_api', None)
+        rows.append({
+            'name': repo.name,
+            'url': repo.url,
+            'license': lic if lic and lic != 'NOASSERTION' else 'No License',
+        })
+    return pd.DataFrame(rows)
+
+
+def categorize_license(license_name):
+    """Map a raw SPDX id to a broad category string."""
+    if not license_name or license_name == 'No License':
+        return 'No License'
+    permissive    = ['MIT', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'ISC', 'Artistic',
+                     'Zlib', 'Python-2.0', 'PSF', 'WTFPL', '0BSD', 'CC0', 'Unlicense', 'BSL-1.0',
+                     'CC-BY-4.0', 'CC-BY-3.0']
+    weak_copyleft = ['LGPL', 'MPL-2.0', 'CDDL', 'EPL', 'EUPL', 'CC-BY-SA']
+    strong_copyleft = ['GPL-2.0', 'GPL-3.0', 'AGPL', 'CPAL', 'OSL']
+    u = license_name.upper()
+    for p in strong_copyleft:
+        if p.upper() in u:
+            return 'Strong Copyleft'
+    for p in weak_copyleft:
+        if p.upper() in u:
+            return 'Weak Copyleft'
+    for p in permissive:
+        if p.upper() in u:
+            return 'Permissive'
+    return 'Other'
+
+
+@st.cache_data
+def load_repository_details():
+    """Load full repository rows for the browser page."""
+    session = get_db_session()
+    repos = session.query(Repository).all()
+    rows = []
+    for repo in repos:
+        lic = getattr(repo, 'license_from_api', None)
+        desc = getattr(repo, 'description', '') or ''
+        rows.append({
+            'name': repo.name,
+            'url': repo.url,
+            'license': lic if lic and lic != 'NOASSERTION' else 'No License',
+            'stars': getattr(repo, 'stars', 0) or 0,
+            'language': getattr(repo, 'language', 'Unknown') or 'Unknown',
+            'description': desc[:100] + '...' if len(desc) > 100 else desc,
+        })
+    return pd.DataFrame(rows)
+
+
+@st.cache_data
 def load_embeddings_for_viz(max_samples=5000):
     """Load embeddings for visualization (sample if too large)"""
     session = get_db_session()
@@ -204,7 +263,7 @@ def main():
     st.sidebar.title("Navigation")
     page = st.sidebar.radio(
         "Select Page",
-        ["Overview", "Cluster Explorer", "Visualization", "Search", "Export"]
+        ["Overview", "Cluster Explorer", "License Analysis", "Repository Browser", "Data Quality", "Visualization", "Search", "Export"]
     )
     
     # Load data
@@ -245,6 +304,12 @@ def main():
         show_overview(stats)
     elif page == "Cluster Explorer":
         show_cluster_explorer(stats.get('run_id'))
+    elif page == "License Analysis":
+        show_license_analysis()
+    elif page == "Repository Browser":
+        show_repository_browser()
+    elif page == "Data Quality":
+        show_data_quality()
     elif page == "Visualization":
         show_visualization()
     elif page == "Search":
@@ -579,6 +644,303 @@ def show_export(run_id):
         data=summary,
         file_name="research_summary.md",
         mime="text/markdown"
+    )
+
+
+def show_license_analysis():
+    """License analysis page"""
+    st.header("📄 License Analysis")
+
+    license_df = load_license_data()
+
+    if license_df.empty:
+        st.info("No repository data yet — run the pipeline first.")
+        return
+
+    total_repos = len(license_df)
+    with_license = len(license_df[license_df['license'] != 'No License'])
+    without_license = total_repos - with_license
+
+    st.subheader("📊 Overview")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Repositories", f"{total_repos:,}")
+    with col2:
+        st.metric("With License", f"{with_license:,}",
+                  delta=f"{with_license/total_repos*100:.1f}%" if total_repos else "0%")
+    with col3:
+        st.metric("Without License", f"{without_license:,}",
+                  delta=f"-{without_license/total_repos*100:.1f}%" if total_repos else "0%",
+                  delta_color="inverse")
+    with col4:
+        unique_licenses = license_df[license_df['license'] != 'No License']['license'].nunique()
+        st.metric("Unique Licenses", unique_licenses)
+
+    st.markdown("---")
+    st.subheader("🏆 Top 10 Licenses")
+
+    license_counts = license_df['license'].value_counts().head(10)
+    col1, col2 = st.columns(2)
+    with col1:
+        fig = px.bar(
+            x=license_counts.values, y=license_counts.index, orientation='h',
+            title="Most Common Licenses",
+            labels={'x': 'Number of Repositories', 'y': 'License'},
+            color=license_counts.values, color_continuous_scale='Blues'
+        )
+        fig.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
+        st.plotly_chart(fig, use_container_width=True)
+    with col2:
+        fig = px.pie(
+            values=license_counts.values, names=license_counts.index,
+            title="License Distribution", hole=0.3
+        )
+        fig.update_layout(height=400)
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+    st.subheader("📂 License Categories")
+
+    license_df['category'] = license_df['license'].apply(categorize_license)
+    category_counts = license_df['category'].value_counts()
+
+    col1, col2 = st.columns(2)
+    with col1:
+        fig = px.bar(
+            x=category_counts.index, y=category_counts.values,
+            title="Licenses by Category",
+            labels={'x': 'Category', 'y': 'Count'},
+            color=category_counts.values, color_continuous_scale='Viridis'
+        )
+        fig.update_layout(height=400)
+        st.plotly_chart(fig, use_container_width=True)
+    with col2:
+        st.markdown("#### Category Breakdown")
+        for category, count in category_counts.items():
+            pct = (count / total_repos * 100) if total_repos else 0
+            st.metric(category, f"{count:,}", delta=f"{pct:.1f}%")
+
+    st.markdown("---")
+    csv = license_df.to_csv(index=False)
+    st.download_button(
+        label="Download License Report (CSV)", data=csv,
+        file_name="license_analysis.csv", mime="text/csv"
+    )
+
+
+def show_repository_browser():
+    """Repository browser page"""
+    st.header("📚 Repository Browser")
+
+    repo_df = load_repository_details()
+
+    if repo_df.empty:
+        st.info("No repository data yet — run the pipeline first.")
+        return
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Repositories", f"{len(repo_df):,}")
+    with col2:
+        st.metric("With License", f"{len(repo_df[repo_df['license'] != 'No License']):,}")
+    with col3:
+        st.metric("Languages", repo_df['language'].nunique())
+    with col4:
+        st.metric("Total Stars", f"{repo_df['stars'].sum():,}")
+
+    st.markdown("---")
+    st.subheader("🔍 Filters")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        selected_license = st.selectbox(
+            "License", ['All'] + sorted(repo_df['license'].unique().tolist()))
+    with col2:
+        selected_language = st.selectbox(
+            "Language", ['All'] + sorted(repo_df['language'].unique().tolist()))
+    with col3:
+        search_term = st.text_input("Search by name", "")
+
+    filtered = repo_df.copy()
+    if selected_license != 'All':
+        filtered = filtered[filtered['license'] == selected_license]
+    if selected_language != 'All':
+        filtered = filtered[filtered['language'] == selected_language]
+    if search_term:
+        filtered = filtered[filtered['name'].str.contains(search_term, case=False, na=False)]
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.markdown(f"**Showing {len(filtered):,} of {len(repo_df):,} repositories**")
+    with col2:
+        sort_by = st.selectbox("Sort by", ["Name", "Stars", "License"])
+
+    if sort_by == "Stars":
+        filtered = filtered.sort_values('stars', ascending=False)
+    elif sort_by == "License":
+        filtered = filtered.sort_values('license')
+    else:
+        filtered = filtered.sort_values('name')
+
+    st.dataframe(
+        filtered[['name', 'license', 'language', 'stars', 'url']].head(500),
+        column_config={
+            "name":     st.column_config.TextColumn("Repository", width="medium"),
+            "license":  st.column_config.TextColumn("License",    width="medium"),
+            "language": st.column_config.TextColumn("Language",   width="small"),
+            "stars":    st.column_config.NumberColumn("⭐ Stars",  width="small"),
+            "url":      st.column_config.LinkColumn("Link",        width="medium"),
+        },
+        hide_index=True, use_container_width=True, height=600
+    )
+    if len(filtered) > 500:
+        st.info("Showing first 500 results. Use filters to narrow down.")
+
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Repository Sources**")
+        filtered['domain'] = filtered['url'].apply(
+            lambda x: urlparse(x).netloc if pd.notna(x) else 'Unknown')
+        for domain, count in filtered['domain'].value_counts().head(5).items():
+            st.write(f"- **{domain}**: {count} repos")
+    with col2:
+        st.markdown("**Top 5 Licenses**")
+        for lic, count in filtered['license'].value_counts().head(5).items():
+            st.write(f"- **{lic}**: {count} repos")
+
+    st.markdown("---")
+    csv = filtered.drop(columns=['domain'], errors='ignore').to_csv(index=False)
+    st.download_button(
+        label=f"Download {len(filtered)} Repositories (CSV)", data=csv,
+        file_name="repository_list.csv", mime="text/csv"
+    )
+
+
+def show_data_quality():
+    """Data quality and processing transparency report"""
+    st.header("📋 Data Quality Report")
+
+    session = get_db_session()
+    total_repos      = session.query(Repository).count()
+    total_readmes    = session.query(ReadmeHeader.repository_id).distinct().count()
+    total_headers    = session.query(ReadmeHeader).count()
+    total_embeddings = session.query(HeaderEmbedding).count()
+    total_clustered  = session.query(HeaderClusterAssignment).count()
+    total_clusters   = session.query(Cluster).count()
+
+    if total_repos == 0:
+        st.info("No data yet — run the pipeline first.")
+        return
+
+    repos_without_readme = total_repos - total_readmes
+    avg_headers = total_headers / total_readmes if total_readmes > 0 else 0
+
+    # The original scraping count from the source CSV
+    ORIGINAL_SCRAPED = 4266
+    invalid_removed  = max(ORIGINAL_SCRAPED - total_repos, 0)
+    retention        = total_repos / ORIGINAL_SCRAPED * 100
+    readme_coverage  = total_readmes / total_repos * 100 if total_repos else 0
+    cluster_coverage = total_clustered / total_headers * 100 if total_headers else 0
+
+    st.subheader("🔄 Processing Pipeline")
+
+    pipeline_df = pd.DataFrame({
+        'Stage': [
+            '1. Initial Scraping', '2. Valid Repositories', '3. README Extracted',
+            '4. Headers Extracted', '5. Embeddings Generated', '6. Clustered'
+        ],
+        'Count': [ORIGINAL_SCRAPED, total_repos, total_readmes,
+                  total_headers, total_embeddings, total_clustered],
+        'Lost': [0, invalid_removed, repos_without_readme,
+                 0, total_headers - total_embeddings, total_embeddings - total_clustered],
+        'Retention %': [
+            100.0,
+            round(total_repos / ORIGINAL_SCRAPED * 100, 1),
+            round(total_readmes / total_repos * 100, 1) if total_repos else 0,
+            100.0,
+            round(total_embeddings / total_headers * 100, 1) if total_headers else 0,
+            round(total_clustered / total_embeddings * 100, 1) if total_embeddings else 0,
+        ],
+    })
+
+    st.dataframe(
+        pipeline_df,
+        column_config={
+            "Stage":       st.column_config.TextColumn("Processing Stage", width="large"),
+            "Count":       st.column_config.NumberColumn("Count",          format="%d"),
+            "Lost":        st.column_config.NumberColumn("Lost",           format="%d"),
+            "Retention %": st.column_config.NumberColumn("Retention",      format="%.1f%%"),
+        },
+        hide_index=True, use_container_width=True
+    )
+
+    st.markdown("---")
+    st.subheader("📊 Data Flow")
+
+    fig = go.Figure(data=[go.Sankey(
+        node=dict(
+            pad=15, thickness=20,
+            line=dict(color="black", width=0.5),
+            label=[
+                f"Initial ({ORIGINAL_SCRAPED:,})", f"Valid ({total_repos:,})",
+                f"With README ({total_readmes:,})", f"Headers ({total_headers:,})",
+                f"Embeddings ({total_embeddings:,})", f"Clustered ({total_clustered:,})"
+            ],
+            color=["#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b"]
+        ),
+        link=dict(
+            source=[0, 1, 2, 3, 4],
+            target=[1, 2, 3, 4, 5],
+            value=[total_repos, total_readmes, total_headers, total_embeddings, total_clustered]
+        )
+    )])
+    fig.update_layout(title="Repository Processing Flow", height=400, font_size=12)
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+    st.subheader("📈 Key Metrics")
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Retention Rate",    f"{retention:.1f}%")
+    with col2:
+        st.metric("README Coverage",   f"{readme_coverage:.1f}%")
+    with col3:
+        st.metric("Cluster Coverage",  f"{cluster_coverage:.1f}%")
+    with col4:
+        st.metric("Avg Headers/README", f"{avg_headers:.1f}")
+
+    st.markdown("---")
+    st.subheader("⚖️ Potential Biases & Limitations")
+    st.markdown("""
+1. **Format bias** — only Markdown READMEs are parsed; RST / AsciiDoc / plain text may be under-represented.
+2. **Platform bias** — mixed sources (GitHub, GitLab, Zenodo, 4TU); documentation conventions differ.
+3. **Temporal bias** — snapshot from a specific date; active vs. archived repositories not distinguished.
+4. **Completeness bias** — repositories without a README are excluded from clustering.
+
+**Mitigations:** high retention rate, large sample size, transparent exclusion reporting, cross-platform deduplication.
+""")
+
+    st.markdown("---")
+    report_md = f"""# Data Quality Report
+Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+## Pipeline
+
+{pipeline_df.to_markdown(index=False)}
+
+## Summary
+- Initial repositories: {ORIGINAL_SCRAPED:,}
+- Final repositories: {total_repos:,} ({retention:.1f}% retention)
+- README coverage: {readme_coverage:.1f}% ({total_readmes:,}/{total_repos:,})
+- Headers extracted: {total_headers:,} (avg {avg_headers:.1f}/README)
+- Clustering coverage: {cluster_coverage:.1f}% ({total_clustered:,}/{total_headers:,})
+- Clusters: {total_clusters}
+"""
+    st.download_button(
+        label="Download Data Quality Report (Markdown)", data=report_md,
+        file_name="data_quality_report.md", mime="text/markdown"
     )
 
 
