@@ -305,13 +305,17 @@ def show_overview(stats):
     st.subheader("🔍 Key Findings")
     
     cluster_df = load_cluster_data(stats.get('run_id'))
-    
+
+    if cluster_df.empty:
+        st.info("No clustering data yet — the pipeline hasn't completed a full run. Check back after the next scheduled scrape.")
+        return
+
     col1, col2 = st.columns(2)
-    
+
     with col1:
         st.markdown("#### Top 10 Largest Clusters")
         top_10 = cluster_df.head(10)
-        
+
         fig = px.bar(
             top_10,
             x='size',
@@ -322,10 +326,10 @@ def show_overview(stats):
         )
         fig.update_layout(height=400, yaxis={'categoryorder':'total ascending'})
         st.plotly_chart(fig, use_container_width=True)
-    
+
     with col2:
         st.markdown("#### Cluster Size Distribution")
-        
+
         fig = px.histogram(
             cluster_df,
             x='size',
@@ -335,13 +339,13 @@ def show_overview(stats):
         )
         fig.update_layout(height=400)
         st.plotly_chart(fig, use_container_width=True)
-    
+
     # Summary stats
     st.markdown("---")
     st.subheader("📊 Cluster Statistics")
-    
+
     col1, col2, col3, col4 = st.columns(4)
-    
+
     with col1:
         st.metric("Mean Cluster Size", f"{cluster_df['size'].mean():.0f}")
     with col2:
@@ -355,9 +359,13 @@ def show_overview(stats):
 def show_cluster_explorer(run_id):
     """Cluster explorer page"""
     st.header("🔍 Cluster Explorer")
-    
+
     cluster_df = load_cluster_data(run_id)
-    
+
+    if cluster_df.empty:
+        st.info("No cluster data yet — run the full pipeline first.")
+        return
+
     # Filters
     col1, col2 = st.columns([2, 1])
     
@@ -501,9 +509,13 @@ def show_search():
 def show_export(run_id):
     """Export page"""
     st.header("📥 Export Results")
-    
+
     cluster_df = load_cluster_data(run_id)
-    
+
+    if cluster_df.empty:
+        st.info("No data to export yet — run the full pipeline first.")
+        return
+
     st.markdown("### Download Options")
     
     col1, col2 = st.columns(2)
