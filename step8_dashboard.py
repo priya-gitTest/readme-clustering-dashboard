@@ -231,7 +231,13 @@ def load_unsupported_repos():
             UnsupportedRepository.host,
         ).all()
     except Exception:
-        # Table may not exist yet on first run before migration
+        # Table may not exist yet on first run before migration.
+        # Rollback is required to clear the failed transaction from the
+        # shared session, otherwise every subsequent query hits PendingRollbackError.
+        try:
+            session.rollback()
+        except Exception:
+            pass
         return pd.DataFrame()
     rows = [
         {
