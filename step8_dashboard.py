@@ -439,7 +439,7 @@ def main():
     <div style='text-align: center; color: #666; padding: 2rem;'>
         <p><strong>Research Software Metadata Analyser</strong></p>
         <p>Analyzing documentation structure patterns in research software</p>
-        <p>© 2026 | MIT License | <a href='https://github.com/your-username/your-repo'>View on GitHub</a></p>
+        <p>© 2026 | MIT License | <a href='https://github.com/priya-gitTest/readme-clustering-dashboard'>View on GitHub</a></p>
     </div>
     """, unsafe_allow_html=True)
 
