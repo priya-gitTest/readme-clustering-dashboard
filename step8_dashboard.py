@@ -16,7 +16,8 @@ from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from database import get_session_context
+from contextlib import contextmanager
+from database import get_session
 from database.models import (
     Repository, ReadmeHeader, HeaderEmbedding,
     Cluster, HeaderClusterAssignment, ExcludedRepository, SomefResult,
@@ -25,6 +26,24 @@ from database.models import (
 from sqlalchemy import func, text
 
 import os
+
+
+@contextmanager
+def get_session_context():
+    """Fresh session per call — auto-rollback on error, always closed.
+
+    Defined locally so the dashboard works with the repo's minimal
+    database module (which only provides get_session()).
+    """
+    session = get_session()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 # Get database URL from Streamlit secrets or environment
 if 'DATABASE_URL' in st.secrets:
