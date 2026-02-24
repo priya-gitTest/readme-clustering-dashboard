@@ -442,7 +442,7 @@ def main():
     AI-Assisted Code Metadata Pipeline
     ```
     
-    **Code:** [GitHub Repository](https://github.com/your-username/your-repo)
+    **Code:** [GitHub Repository](https://github.com/priya-gitTest/readme-clustering-dashboard)
     """)
     
     # Page routing
