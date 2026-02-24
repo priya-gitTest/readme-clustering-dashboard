@@ -414,3 +414,32 @@ class ExcludedRepository(Base):
         Index("idx_excluded_stage", "exclusion_stage"),
         Index("idx_excluded_retryable", "is_retryable", "resolved_at"),
     )
+
+
+class UnsupportedRepository(Base):
+    """URLs collected by step0 whose platform is not yet supported by step2.
+
+    Each row is one unique URL.  On repeated step0 runs the occurrence_count
+    is incremented and last_seen_at updated, making it easy to see which
+    unsupported hosts appear most often and are therefore the best candidates
+    for future platform support (scrapers/utils.py _GITLAB_SUBSTRINGS or a
+    new dedicated scraper).
+    """
+
+    __tablename__ = "unsupported_repositories"
+
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    url              = Column(Text, nullable=False)
+    source           = Column(String(100), nullable=False)   # rsd / helmholtz / joss
+    host             = Column(String(255), nullable=False)   # urlparse(url).netloc
+    platform         = Column(String(100), nullable=False)   # detect_platform() or "unrecognised"
+    first_seen_at    = Column(DateTime, nullable=False, default=datetime.utcnow)
+    last_seen_at     = Column(DateTime, nullable=False, default=datetime.utcnow)
+    occurrence_count = Column(Integer, nullable=False, default=1)
+
+    __table_args__ = (
+        UniqueConstraint("url", name="uq_unsupported_url"),
+        Index("idx_unsupported_host",     "host"),
+        Index("idx_unsupported_platform", "platform"),
+        Index("idx_unsupported_source",   "source"),
+    )

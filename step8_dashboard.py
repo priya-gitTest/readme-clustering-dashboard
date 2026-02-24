@@ -20,6 +20,7 @@ from database import get_session
 from database.models import (
     Repository, ReadmeHeader, HeaderEmbedding,
     Cluster, HeaderClusterAssignment, ExcludedRepository, SomefResult,
+    UnsupportedRepository,
 )
 from sqlalchemy import func, text
 
@@ -206,6 +207,41 @@ def load_excluded_repos():
             'source': r.source or 'unknown',
             'retryable': r.is_retryable,
             'excluded_at': r.excluded_at,
+        }
+        for r in rows_q
+    ]
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=300)
+def load_unsupported_repos():
+    """Load unsupported-platform repositories for the browser page."""
+    session = get_db_session()
+    try:
+        rows_q = session.query(
+            UnsupportedRepository.url,
+            UnsupportedRepository.source,
+            UnsupportedRepository.host,
+            UnsupportedRepository.platform,
+            UnsupportedRepository.occurrence_count,
+            UnsupportedRepository.first_seen_at,
+            UnsupportedRepository.last_seen_at,
+        ).order_by(
+            UnsupportedRepository.occurrence_count.desc(),
+            UnsupportedRepository.host,
+        ).all()
+    except Exception:
+        # Table may not exist yet on first run before migration
+        return pd.DataFrame()
+    rows = [
+        {
+            "url":              r.url,
+            "source":           r.source,
+            "host":             r.host,
+            "platform":         r.platform,
+            "seen":             r.occurrence_count,
+            "first_seen":       r.first_seen_at,
+            "last_seen":        r.last_seen_at,
         }
         for r in rows_q
     ]
@@ -981,6 +1017,106 @@ def show_repository_browser():
             st.download_button(
                 label=f"Download {len(excl_filtered)} Excluded Repos (CSV)", data=excl_csv,
                 file_name="excluded_repositories.csv", mime="text/csv"
+            )
+
+    # ── Unsupported-Platform Repositories ─────────────────────────────────
+    st.markdown("---")
+    unsup_df = load_unsupported_repos()
+    with st.expander(
+        f"⚠️ Unsupported Platform Repositories ({len(unsup_df):,} total)", expanded=False
+    ):
+        if unsup_df.empty:
+            st.info(
+                "No unsupported-platform repositories recorded yet. "
+                "They are collected from step0 sources (RSD, Helmholtz, JOSS) "
+                "when a URL's hosting platform is not supported by the pipeline scraper."
+            )
+        else:
+            st.caption(
+                "These URLs were found by the step0 collectors but their hosting platform "
+                "is not yet supported by the pipeline scraper (step2). "
+                "Hosts appearing frequently are the best candidates for future support — "
+                "add them to `_GITLAB_SUBSTRINGS` in `scrapers/utils.py` or build a new scraper."
+            )
+
+            # ── Summary metrics ──────────────────────────────────────────
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Unique URLs", f"{len(unsup_df):,}")
+            with col2:
+                st.metric("Distinct Hosts", f"{unsup_df['host'].nunique():,}")
+            with col3:
+                st.metric("Distinct Platforms", f"{unsup_df['platform'].nunique():,}")
+
+            # ── Host frequency bar chart ─────────────────────────────────
+            host_counts = (
+                unsup_df.groupby("host")["seen"].sum()
+                .sort_values(ascending=False)
+                .head(20)
+                .reset_index()
+                .rename(columns={"seen": "occurrences"})
+            )
+            fig = px.bar(
+                host_counts, x="occurrences", y="host", orientation="h",
+                title="Top 20 Unsupported Hosts (by total occurrences)",
+                labels={"host": "Host", "occurrences": "Occurrences"},
+                height=max(300, len(host_counts) * 26),
+            )
+            fig.update_layout(yaxis={"autorange": "reversed"}, margin={"l": 10, "r": 10})
+            st.plotly_chart(fig, use_container_width=True)
+
+            # ── Filters ──────────────────────────────────────────────────
+            ucol1, ucol2, ucol3 = st.columns(3)
+            with ucol1:
+                u_platform = st.selectbox(
+                    "Filter by platform",
+                    ["All"] + sorted(unsup_df["platform"].unique().tolist()),
+                    key="unsup_platform",
+                )
+            with ucol2:
+                u_source = st.selectbox(
+                    "Filter by source",
+                    ["All"] + sorted(unsup_df["source"].unique().tolist()),
+                    key="unsup_source",
+                )
+            with ucol3:
+                u_search = st.text_input("Search URL / host", "", key="unsup_search")
+
+            unsup_filtered = unsup_df.copy()
+            if u_platform != "All":
+                unsup_filtered = unsup_filtered[unsup_filtered["platform"] == u_platform]
+            if u_source != "All":
+                unsup_filtered = unsup_filtered[unsup_filtered["source"] == u_source]
+            if u_search:
+                mask = (
+                    unsup_filtered["url"].str.contains(u_search, case=False, na=False)
+                    | unsup_filtered["host"].str.contains(u_search, case=False, na=False)
+                )
+                unsup_filtered = unsup_filtered[mask]
+
+            st.markdown(f"**Showing {len(unsup_filtered):,} of {len(unsup_df):,} records**")
+            st.dataframe(
+                unsup_filtered[["url", "source", "host", "platform", "seen", "first_seen", "last_seen"]].head(500),
+                column_config={
+                    "url":        st.column_config.LinkColumn("URL",          width="large"),
+                    "source":     st.column_config.TextColumn("Source",       width="small"),
+                    "host":       st.column_config.TextColumn("Host",         width="medium"),
+                    "platform":   st.column_config.TextColumn("Platform",     width="small"),
+                    "seen":       st.column_config.NumberColumn("# Seen",     width="small"),
+                    "first_seen": st.column_config.DatetimeColumn("First Seen", width="medium"),
+                    "last_seen":  st.column_config.DatetimeColumn("Last Seen",  width="medium"),
+                },
+                hide_index=True, use_container_width=True, height=400,
+            )
+            if len(unsup_filtered) > 500:
+                st.info("Showing first 500 results. Use filters to narrow down.")
+
+            unsup_csv = unsup_filtered.to_csv(index=False)
+            st.download_button(
+                label=f"Download {len(unsup_filtered)} Unsupported Repos (CSV)",
+                data=unsup_csv,
+                file_name="unsupported_repositories.csv",
+                mime="text/csv",
             )
 
 
