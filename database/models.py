@@ -40,10 +40,6 @@ class Repository(Base):
     license_from_api = Column(String(100))
     readme_content = Column(Text)
     readme_format = Column(String(20), default="markdown")  # markdown, rst, txt
-    scrape_status = Column(String(20), default="success")
-    scrape_error = Column(Text)
-    
-    # Timestamp - actual DB uses scraped_at (not created_at/updated_at/last_scraped_at)
     scraped_at = Column(DateTime)
 
     # Source tracking (which CSV / input file this repo came from)
@@ -66,7 +62,6 @@ class Repository(Base):
     __table_args__ = (
         Index("idx_repo_platform_owner", "platform", "owner"),
         Index("idx_repo_language", "language"),
-        Index("idx_repo_scrape_status", "scrape_status"),
     )
 
 class ReadmeMetadataExtracted(Base):

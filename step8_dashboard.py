@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from database import get_session
 from database.models import (
     Repository, ReadmeHeader, HeaderEmbedding,
-    Cluster, HeaderClusterAssignment, ExcludedRepository,
+    Cluster, HeaderClusterAssignment, ExcludedRepository, SomefResult,
 )
 from sqlalchemy import func, text
 
@@ -212,6 +212,74 @@ def load_excluded_repos():
 
 
 @st.cache_data(ttl=300)
+def load_somef_stats():
+    """Load SOMEF validation results for the SOMEF Validation page."""
+    CATEGORIES = [
+        "description", "installation", "invocation", "citation",
+        "requirement", "documentation", "contributor", "license",
+        "usage", "acknowledgement", "run", "support",
+    ]
+    session = get_db_session()
+    total = session.query(SomefResult).count()
+    if total == 0:
+        return {"total": 0, "categories": CATEGORIES}
+
+    errors = session.query(SomefResult).filter(SomefResult.error.isnot(None)).count()
+
+    # Per-category coverage: count rows where the column is non-null
+    cat_counts = {}
+    for cat in CATEGORIES:
+        col = getattr(SomefResult, cat)
+        cat_counts[cat] = session.query(SomefResult).filter(col.isnot(None)).count()
+
+    # Per-repo summary table
+    rows_q = (
+        session.query(
+            Repository.name,
+            Repository.url,
+            SomefResult.categories_found,
+            SomefResult.processing_time_s,
+            SomefResult.somef_version,
+            SomefResult.error,
+            SomefResult.run_date,
+        )
+        .join(SomefResult, SomefResult.repository_id == Repository.id)
+        .all()
+    )
+
+    rows = []
+    for name, url, cats_json, proc_time, version, error, run_date in rows_q:
+        try:
+            cats = json.loads(cats_json) if cats_json else []
+        except (ValueError, TypeError):
+            cats = []
+        rows.append({
+            "name":            name,
+            "url":             url,
+            "categories_found": len(cats),
+            "categories":      ", ".join(cats) if cats else "",
+            "processing_s":    round(proc_time, 1) if proc_time else None,
+            "somef_version":   version,
+            "error":           error,
+            "run_date":        run_date,
+        })
+
+    df = pd.DataFrame(rows)
+    avg_cats = df["categories_found"].mean() if not df.empty else 0
+    avg_time = df["processing_s"].mean() if not df.empty else 0
+
+    return {
+        "total":      total,
+        "errors":     errors,
+        "avg_cats":   avg_cats,
+        "avg_time":   avg_time,
+        "cat_counts": cat_counts,
+        "categories": CATEGORIES,
+        "df":         df,
+    }
+
+
+@st.cache_data(ttl=300)
 def load_embeddings_for_viz(max_samples=5000):
     """Load embeddings for visualization (sample if too large)"""
     session = get_db_session()
@@ -282,7 +350,8 @@ def main():
     st.sidebar.title("Navigation")
     page = st.sidebar.radio(
         "Select Page",
-        ["Overview", "Cluster Explorer", "License Analysis", "Repository Browser", "Data Quality", "Visualization", "Search", "Export"]
+        ["Overview", "Cluster Explorer", "License Analysis", "Repository Browser",
+         "SOMEF Validation", "Data Quality", "Visualization", "Search", "Export"]
     )
 
     # Page title — dynamic per page
@@ -294,6 +363,7 @@ def main():
         "Data Quality":        "📋 Data Quality Report",
         "Visualization":       "📊 Embedding Visualization",
         "Search":              "🔎 Header Search",
+        "SOMEF Validation":    "🔬 SOMEF Metadata Validation",
         "Export":              "📥 Export Results",
     }
     st.markdown(
@@ -347,6 +417,8 @@ def main():
         show_license_analysis()
     elif page == "Repository Browser":
         show_repository_browser()
+    elif page == "SOMEF Validation":
+        show_somef_validation()
     elif page == "Data Quality":
         show_data_quality()
     elif page == "Visualization":
@@ -1033,6 +1105,103 @@ Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
     st.download_button(
         label="Download Data Quality Report (Markdown)", data=report_md,
         file_name="data_quality_report.md", mime="text/markdown"
+    )
+
+
+def show_somef_validation():
+    """SOMEF metadata extraction results page."""
+    data = load_somef_stats()
+
+    if data["total"] == 0:
+        st.info(
+            "No SOMEF results yet. Run step 7 to populate this page:\n\n"
+            "```bash\n"
+            "pip install -e \".[somef]\"\n"
+            "python -X utf8 step7_somef_validation.py --limit 200 --threshold 0.8\n"
+            "```"
+        )
+        return
+
+    # ── Summary metrics ───────────────────────────────────────────────────
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Repos Validated", f"{data['total']:,}")
+    with col2:
+        st.metric("Successful", f"{data['total'] - data['errors']:,}")
+    with col3:
+        st.metric("Avg Categories Found", f"{data['avg_cats']:.1f} / {len(data['categories'])}")
+    with col4:
+        st.metric("Avg Processing Time", f"{data['avg_time']:.1f}s")
+
+    # ── Category coverage bar chart ───────────────────────────────────────
+    st.markdown("---")
+    st.subheader("📊 Category Coverage")
+    st.caption("How many repos had each SOMEF category detected (out of total validated).")
+
+    cat_df = pd.DataFrame({
+        "Category": [c.capitalize() for c in data["categories"]],
+        "Repos":    [data["cat_counts"][c] for c in data["categories"]],
+        "Coverage %": [
+            round(data["cat_counts"][c] / data["total"] * 100, 1)
+            for c in data["categories"]
+        ],
+    }).sort_values("Repos", ascending=False)
+
+    fig = px.bar(
+        cat_df, x="Category", y="Coverage %",
+        text="Repos",
+        color="Coverage %", color_continuous_scale="Blues",
+        labels={"Coverage %": "Coverage (%)"},
+    )
+    fig.update_traces(textposition="outside")
+    fig.update_layout(height=420, coloraxis_showscale=False)
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.dataframe(
+        cat_df,
+        column_config={
+            "Category":   st.column_config.TextColumn("Category",    width="medium"),
+            "Repos":      st.column_config.NumberColumn("# Repos",   width="small"),
+            "Coverage %": st.column_config.NumberColumn("Coverage %", format="%.1f%%", width="small"),
+        },
+        hide_index=True, use_container_width=True,
+    )
+
+    # ── Per-repo browser ──────────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("🔍 Per-Repository Results")
+
+    df = data["df"]
+    col1, col2 = st.columns(2)
+    with col1:
+        min_cats = st.slider("Minimum categories found", 0, len(data["categories"]), 0)
+    with col2:
+        show_errors = st.checkbox("Show only errored repos", value=False)
+
+    filtered = df[df["categories_found"] >= min_cats]
+    if show_errors:
+        filtered = filtered[filtered["error"].notna()]
+
+    st.markdown(f"**Showing {len(filtered):,} of {len(df):,} repos**")
+    st.dataframe(
+        filtered[["name", "categories_found", "categories", "processing_s", "somef_version", "error", "url"]].head(500),
+        column_config={
+            "name":             st.column_config.TextColumn("Repository",        width="medium"),
+            "categories_found": st.column_config.NumberColumn("# Categories",    width="small"),
+            "categories":       st.column_config.TextColumn("Categories Found",  width="large"),
+            "processing_s":     st.column_config.NumberColumn("Time (s)",        format="%.1f", width="small"),
+            "somef_version":    st.column_config.TextColumn("SOMEF Version",     width="small"),
+            "error":            st.column_config.TextColumn("Error",             width="medium"),
+            "url":              st.column_config.LinkColumn("Link",              width="medium"),
+        },
+        hide_index=True, use_container_width=True, height=500,
+    )
+
+    st.markdown("---")
+    csv = filtered.drop(columns=["run_date"], errors="ignore").to_csv(index=False)
+    st.download_button(
+        label=f"Download {len(filtered)} SOMEF Results (CSV)", data=csv,
+        file_name="somef_results.csv", mime="text/csv",
     )
 
 
