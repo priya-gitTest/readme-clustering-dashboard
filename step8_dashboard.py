@@ -4,6 +4,7 @@ Research Dashboard: README Header Clustering Analysis
 Interactive visualization and exploration of clustering results
 """
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -351,7 +352,8 @@ def main():
     page = st.sidebar.radio(
         "Select Page",
         ["Overview", "Cluster Explorer", "License Analysis", "Repository Browser",
-         "SOMEF Validation", "Data Quality", "Visualization", "Search", "Export"]
+         "SOMEF Validation", "Data Quality", "Visualization", "Search", "Export",
+         "Architecture"]
     )
 
     # Page title — dynamic per page
@@ -365,6 +367,7 @@ def main():
         "Search":              "🔎 Header Search",
         "SOMEF Validation":    "🔬 SOMEF Metadata Validation",
         "Export":              "📥 Export Results",
+        "Architecture":        "🏗️ Architecture",
     }
     st.markdown(
         f'<div class="main-header">{PAGE_TITLES.get(page, "README Header Clustering Analysis")}</div>',
@@ -427,6 +430,8 @@ def main():
         show_search()
     elif page == "Export":
         show_export(stats.get('run_id'))
+    elif page == "Architecture":
+        show_architecture()
     
     # Footer
     st.markdown("---")
@@ -1203,6 +1208,246 @@ def show_somef_validation():
         label=f"Download {len(filtered)} SOMEF Results (CSV)", data=csv,
         file_name="somef_results.csv", mime="text/csv",
     )
+
+
+def _render_mermaid(diagram: str, height: int = 500) -> None:
+    """Render a Mermaid diagram using the Mermaid JS CDN."""
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+      <script>mermaid.initialize({{startOnLoad: true, theme: 'default'}});</script>
+      <style>
+        body {{ margin: 0; background: transparent; }}
+        .mermaid {{ width: 100%; overflow-x: auto; }}
+      </style>
+    </head>
+    <body>
+      <div class="mermaid">
+{diagram}
+      </div>
+    </body>
+    </html>
+    """
+    components.html(html, height=height, scrolling=True)
+
+
+PIPELINE_DIAGRAM = """
+flowchart TD
+    subgraph Sources["📥 Input Sources"]
+        SRC1[JOSS API]
+        SRC2[Helmholtz RSD]
+        SRC3[Research Software Directory]
+        SRC4[Manual CSV]
+    end
+
+    Sources --> S0["Step 0 — step0_collect_repos.py
+    Collect and deduplicate URLs
+    adds source label per URL"]
+
+    S0 --> CSV["output/code_repository_list.csv
+    (url · source)"]
+
+    CSV --> S2PRE["Step 2 Preflight — step2_preflight.py
+    Validate config and DB connection"]
+
+    S2PRE --> S2["Step 2 — step2_scrape_repos.py
+    Scrape GitHub · GitLab · Bitbucket · Codeberg
+    Creates analysis_run row"]
+
+    S2 -->|scrape succeeded| REPOS[(repositories
+    repository_history
+    analysis_runs)]
+    S2 -->|scrape failed| EXCL[(excluded_repositories)]
+
+    REPOS --> S3["Step 3 — extract_all.py
+    Parse READMEs: badges · DOIs · sections"]
+    S3 --> META[(readme_metadata)]
+
+    REPOS --> S4["Step 4 — step4_license_analysis.py
+    SPDX license classification"]
+    S4 --> S4B["Step 4b — step4b_recheck_licenses.py
+    Re-check unknown / custom licenses"]
+    S4B --> S4C["Step 4c — step4c_fetch_license_files.py
+    Fetch raw LICENSE files · seed SPDX catalog"]
+    S4C --> LIC[(repository_licenses
+    license_files · licenses)]
+
+    REPOS --> S5["Step 5 — step5_header_extraction.py
+    Extract H1-H6 headers from READMEs"]
+    S5 --> HDR[(readme_headers)]
+
+    HDR --> S6["Step 6 — step6_clustering.py
+    Sentence embeddings all-MiniLM-L6-v2
+    + sklearn K-Means clustering"]
+    S6 --> CLUST[(header_embeddings
+    clusters
+    header_cluster_assignments)]
+
+    REPOS --> S7["Step 7 optional — step7_somef_validation.py
+    SOMEF metadata extraction"]
+    S7 --> SOMEF[(somef_results)]
+
+    META & LIC & CLUST & SOMEF --> S8["Step 8 — step8_dashboard.py
+    Streamlit interactive dashboard"]
+
+    CLUST -.->|future Steps 9-11| FUTURE["cluster_codemeta_mappings
+    cluster_reuse_scenarios
+    unmapped_clusters"]
+"""
+
+ERD_DIAGRAM = """
+erDiagram
+    repositories {
+        int     id              PK
+        text    url
+        text    name
+        text    platform
+        text    source
+        text    license_from_api
+        text    license_category
+        datetime scraped_at
+    }
+    excluded_repositories {
+        int     id              PK
+        text    url
+        text    exclusion_reason
+        text    exclusion_stage
+        text    source
+        bool    is_retryable
+    }
+    readme_metadata {
+        int     id              PK
+        int     repository_id   FK
+        text    readme_title
+        int     badge_count
+        bool    has_doi
+        bool    has_citation_section
+    }
+    readme_headers {
+        int     id              PK
+        int     repository_id   FK
+        text    header_text
+        int     level
+        text    normalized_text
+    }
+    header_embeddings {
+        int     id              PK
+        int     header_id       FK
+        bytes   embedding_vector
+        text    model_name
+    }
+    clusters {
+        int     id              PK
+        text    run_id          FK
+        int     cluster_id
+        text    cluster_name
+        int     cluster_size
+    }
+    header_cluster_assignments {
+        int     id              PK
+        int     header_id       FK
+        int     cluster_id      FK
+        float   distance
+    }
+    cluster_codemeta_mappings {
+        int     id              PK
+        int     cluster_id      FK
+        text    codemeta_property
+        float   confidence
+    }
+    cluster_reuse_scenarios {
+        int     id              PK
+        int     cluster_id      FK
+        text    scenario
+        float   relevance_score
+    }
+    unmapped_clusters {
+        int     id              PK
+        int     cluster_id      FK
+        text    proposed_property_name
+        text    priority
+    }
+    licenses {
+        int     id              PK
+        text    spdx_id
+        text    name
+        text    category
+    }
+    repository_licenses {
+        int     id              PK
+        int     repository_id   FK
+        int     license_id      FK
+        text    source
+    }
+    license_files {
+        int     id              PK
+        int     repository_id   FK
+        text    filename
+        text    detected_license
+    }
+    analysis_runs {
+        text    run_id          PK
+        datetime run_date
+        int     total_repos
+        int     n_clusters
+    }
+    repository_history {
+        int     id              PK
+        int     repository_id   FK
+        text    run_id          FK
+        text    status
+        text    readme_hash
+    }
+    somef_results {
+        int     id              PK
+        int     repository_id   FK
+        text    categories_found
+        float   processing_time_s
+    }
+
+    repositories ||--o{ readme_headers              : "has headers"
+    repositories ||--o|  readme_metadata             : "has metadata"
+    repositories ||--o{ repository_licenses          : "has licenses"
+    repositories ||--o{ license_files                : "has license files"
+    repositories ||--o{ repository_history           : "has history"
+    repositories ||--o|  somef_results               : "has SOMEF result"
+    readme_headers  ||--o|  header_embeddings         : "has embedding"
+    readme_headers  ||--o|  header_cluster_assignments : "assigned to cluster"
+    header_cluster_assignments }o--||  clusters           : "belongs to"
+    clusters        ||--o{ cluster_codemeta_mappings  : "mapped to"
+    clusters        ||--o{ cluster_reuse_scenarios    : "tagged with"
+    clusters        ||--o{ unmapped_clusters          : "flagged as gap"
+    clusters        }o--||  analysis_runs              : "created in run"
+    repository_licenses }o--||  licenses               : "references"
+    repository_history  }o--||  analysis_runs           : "recorded in run"
+"""
+
+
+def show_architecture():
+    """Architecture diagrams — pipeline flow and database ERD."""
+    st.markdown(
+        "Visual overview of the pipeline steps and database schema. "
+        "Both diagrams are kept in sync with the codebase."
+    )
+
+    st.markdown("---")
+    st.subheader("🔄 Pipeline Flow")
+    st.caption(
+        "End-to-end flow from input sources through all pipeline steps to the dashboard. "
+        "Dashed arrow indicates planned future steps."
+    )
+    _render_mermaid(PIPELINE_DIAGRAM, height=780)
+
+    st.markdown("---")
+    st.subheader("🗄️ Database Schema (ERD)")
+    st.caption(
+        "All 15 database tables with key columns and foreign-key relationships. "
+        "Tables shown with dashed borders (cluster_codemeta_mappings, "
+        "cluster_reuse_scenarios, unmapped_clusters) are schema-ready but not yet populated."
+    )
+    _render_mermaid(ERD_DIAGRAM, height=900)
 
 
 if __name__ == "__main__":
