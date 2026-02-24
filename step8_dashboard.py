@@ -453,11 +453,11 @@ def main():
     elif page == "Cluster Explorer":
         show_cluster_explorer(stats.get('run_id'))
     elif page == "License Analysis":
-        show_license_analysis()
+        show_license_analysis(stats.get('run_id'))
     elif page == "Repository Browser":
-        show_repository_browser()
+        show_repository_browser(stats.get('run_id'))
     elif page == "SOMEF Validation":
-        show_somef_validation()
+        show_somef_validation(stats.get('run_id'))
     elif page == "Data Quality":
         show_data_quality()
     elif page == "Visualization":
@@ -733,6 +733,7 @@ def show_search():
 def show_export(run_id):
     """Export page"""
 
+    ts = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
     cluster_df = load_cluster_data(run_id)
 
     if cluster_df.empty:
@@ -745,21 +746,23 @@ def show_export(run_id):
     
     with col1:
         st.markdown("#### Cluster Summary (CSV)")
-        csv = cluster_df[['cluster_id', 'name', 'size', 'sample']].to_csv(index=False)
+        _dl = cluster_df[['cluster_id', 'name', 'size', 'sample']].copy()
+        if run_id:
+            _dl['run_id'] = run_id
         st.download_button(
             label="Download CSV",
-            data=csv,
-            file_name="cluster_summary.csv",
+            data=_dl.to_csv(index=False),
+            file_name=f"cluster_summary_{ts}.csv",
             mime="text/csv"
         )
-    
+
     with col2:
         st.markdown("#### Full Report (JSON)")
         json_data = cluster_df.to_json(orient='records', indent=2)
         st.download_button(
             label="Download JSON",
             data=json_data,
-            file_name="cluster_report.json",
+            file_name=f"cluster_report_{ts}.json",
             mime="application/json"
         )
     
@@ -800,14 +803,15 @@ def show_export(run_id):
     st.download_button(
         label="Download Summary (Markdown)",
         data=summary,
-        file_name="research_summary.md",
+        file_name=f"research_summary_{ts}.md",
         mime="text/markdown"
     )
 
 
-def show_license_analysis():
+def show_license_analysis(run_id=None):
     """License analysis page"""
 
+    ts = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
     license_df = load_license_data()
 
     if license_df.empty:
@@ -859,10 +863,12 @@ def show_license_analysis():
                 hide_index=True,
             )
 
-            no_lic_csv = no_lic_df.to_csv(index=False)
+            _dl = no_lic_df.copy()
+            if run_id:
+                _dl['run_id'] = run_id
             st.download_button(
-                "Download list (CSV)", data=no_lic_csv,
-                file_name="repos_without_license.csv", mime="text/csv",
+                "Download list (CSV)", data=_dl.to_csv(index=False),
+                file_name=f"repos_without_license_{ts}.csv", mime="text/csv",
                 key="no_lic_csv_dl",
             )
 
@@ -911,16 +917,19 @@ def show_license_analysis():
             st.metric(category, f"{count:,}", delta=f"{pct:.1f}%")
 
     st.markdown("---")
-    csv = license_df.to_csv(index=False)
+    _dl = license_df.copy()
+    if run_id:
+        _dl['run_id'] = run_id
     st.download_button(
-        label="Download License Report (CSV)", data=csv,
-        file_name="license_analysis.csv", mime="text/csv"
+        label="Download License Report (CSV)", data=_dl.to_csv(index=False),
+        file_name=f"license_analysis_{ts}.csv", mime="text/csv"
     )
 
 
-def show_repository_browser():
+def show_repository_browser(run_id=None):
     """Repository browser page"""
 
+    ts = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
     repo_df = load_repository_details()
 
     if repo_df.empty:
@@ -1007,10 +1016,12 @@ def show_repository_browser():
             st.write(f"- **{lic}**: {count} repos")
 
     st.markdown("---")
-    csv = filtered.drop(columns=['domain'], errors='ignore').to_csv(index=False)
+    _dl = filtered.drop(columns=['domain'], errors='ignore').copy()
+    if run_id:
+        _dl['run_id'] = run_id
     st.download_button(
-        label=f"Download {len(filtered)} Repositories (CSV)", data=csv,
-        file_name="repository_list.csv", mime="text/csv"
+        label=f"Download {len(filtered)} Repositories (CSV)", data=_dl.to_csv(index=False),
+        file_name=f"repository_list_{ts}.csv", mime="text/csv"
     )
 
     # ── Excluded Repositories ─────────────────────────────────────────────
@@ -1054,10 +1065,13 @@ def show_repository_browser():
                 },
                 hide_index=True, use_container_width=True, height=400
             )
-            excl_csv = excl_filtered.to_csv(index=False)
+            _excl_dl = excl_filtered.copy()
+            if run_id:
+                _excl_dl['run_id'] = run_id
             st.download_button(
-                label=f"Download {len(excl_filtered)} Excluded Repos (CSV)", data=excl_csv,
-                file_name="excluded_repositories.csv", mime="text/csv"
+                label=f"Download {len(excl_filtered)} Excluded Repos (CSV)",
+                data=_excl_dl.to_csv(index=False),
+                file_name=f"excluded_repositories_{ts}.csv", mime="text/csv"
             )
 
     # ── Unsupported-Platform Repositories ─────────────────────────────────
@@ -1152,11 +1166,13 @@ def show_repository_browser():
             if len(unsup_filtered) > 500:
                 st.info("Showing first 500 results. Use filters to narrow down.")
 
-            unsup_csv = unsup_filtered.to_csv(index=False)
+            _unsup_dl = unsup_filtered.copy()
+            if run_id:
+                _unsup_dl['run_id'] = run_id
             st.download_button(
                 label=f"Download {len(unsup_filtered)} Unsupported Repos (CSV)",
-                data=unsup_csv,
-                file_name="unsupported_repositories.csv",
+                data=_unsup_dl.to_csv(index=False),
+                file_name=f"unsupported_repositories_{ts}.csv",
                 mime="text/csv",
             )
 
@@ -1164,6 +1180,7 @@ def show_repository_browser():
 def show_data_quality():
     """Data quality and processing transparency report"""
 
+    ts = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
     with get_session_context() as session:
         total_repos      = session.query(Repository).count()
         total_readmes    = session.query(ReadmeHeader.repository_id).distinct().count()
@@ -1284,12 +1301,13 @@ Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
 """
     st.download_button(
         label="Download Data Quality Report (Markdown)", data=report_md,
-        file_name="data_quality_report.md", mime="text/markdown"
+        file_name=f"data_quality_report_{ts}.md", mime="text/markdown"
     )
 
 
-def show_somef_validation():
+def show_somef_validation(run_id=None):
     """SOMEF metadata extraction results page."""
+    ts = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
     data = load_somef_stats()
 
     if data["total"] == 0:
@@ -1378,10 +1396,12 @@ def show_somef_validation():
     )
 
     st.markdown("---")
-    csv = filtered.drop(columns=["run_date"], errors="ignore").to_csv(index=False)
+    _dl = filtered.drop(columns=["run_date"], errors="ignore").copy()
+    if run_id:
+        _dl['run_id'] = run_id
     st.download_button(
-        label=f"Download {len(filtered)} SOMEF Results (CSV)", data=csv,
-        file_name="somef_results.csv", mime="text/csv",
+        label=f"Download {len(filtered)} SOMEF Results (CSV)", data=_dl.to_csv(index=False),
+        file_name=f"somef_results_{ts}.csv", mime="text/csv",
     )
 
 
