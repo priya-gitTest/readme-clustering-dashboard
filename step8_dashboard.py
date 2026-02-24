@@ -144,6 +144,8 @@ def load_license_data():
             rows.append({
                 'name': repo.name,
                 'url': repo.url,
+                'platform': repo.platform or '',
+                'source': repo.source or '',
                 'license': lic if lic and lic != 'NOASSERTION' else 'No License',
             })
     return pd.DataFrame(rows)
@@ -830,6 +832,39 @@ def show_license_analysis():
     with col4:
         unique_licenses = license_df[license_df['license'] != 'No License']['license'].nunique()
         st.metric("Unique Licenses", unique_licenses)
+
+    # ── Drilldown: repos without a license ────────────────────────────────
+    if without_license > 0:
+        with st.expander(f"View {without_license} repositories without a license"):
+            no_lic_df = license_df[license_df['license'] == 'No License'][
+                ['name', 'url', 'platform', 'source']
+            ].copy().reset_index(drop=True)
+
+            # Platform filter
+            platforms = sorted(no_lic_df['platform'].unique().tolist())
+            if len(platforms) > 1:
+                sel = st.multiselect("Filter by platform", platforms, default=platforms,
+                                     key="no_lic_platform_filter")
+                no_lic_df = no_lic_df[no_lic_df['platform'].isin(sel)]
+
+            st.dataframe(
+                no_lic_df,
+                column_config={
+                    "url": st.column_config.LinkColumn("URL"),
+                    "name": "Name",
+                    "platform": "Platform",
+                    "source": "Source",
+                },
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            no_lic_csv = no_lic_df.to_csv(index=False)
+            st.download_button(
+                "Download list (CSV)", data=no_lic_csv,
+                file_name="repos_without_license.csv", mime="text/csv",
+                key="no_lic_csv_dl",
+            )
 
     st.markdown("---")
     st.subheader("🏆 Top 10 Licenses")
