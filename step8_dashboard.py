@@ -17,8 +17,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database import get_session
 from database.models import (
-    Repository, ReadmeHeader, HeaderEmbedding, 
-    Cluster, HeaderClusterAssignment
+    Repository, ReadmeHeader, HeaderEmbedding,
+    Cluster, HeaderClusterAssignment, ExcludedRepository,
 )
 from sqlalchemy import func, text
 
@@ -75,7 +75,7 @@ def get_db_session():
     return get_session()
 
 
-@st.cache_data
+@st.cache_data(ttl=300)
 def load_overview_stats():
     """Load overview statistics"""
     session = get_db_session()
@@ -99,7 +99,7 @@ def load_overview_stats():
     return stats
 
 
-@st.cache_data
+@st.cache_data(ttl=300)
 def load_cluster_data(run_id=None):
     """Load cluster information"""
     session = get_db_session()
@@ -126,7 +126,7 @@ def load_cluster_data(run_id=None):
     return pd.DataFrame(cluster_data)
 
 
-@st.cache_data
+@st.cache_data(ttl=300)
 def load_license_data():
     """Load per-repo license information from the repositories table."""
     session = get_db_session()
@@ -164,7 +164,7 @@ def categorize_license(license_name):
     return 'Other'
 
 
-@st.cache_data
+@st.cache_data(ttl=300)
 def load_repository_details():
     """Load full repository rows for the browser page."""
     session = get_db_session()
@@ -180,11 +180,38 @@ def load_repository_details():
             'stars': getattr(repo, 'stars', 0) or 0,
             'language': getattr(repo, 'language', 'Unknown') or 'Unknown',
             'description': desc[:100] + '...' if len(desc) > 100 else desc,
+            'source': getattr(repo, 'source', None) or 'unknown',
         })
     return pd.DataFrame(rows)
 
 
-@st.cache_data
+@st.cache_data(ttl=300)
+def load_excluded_repos():
+    """Load excluded repositories for the browser page."""
+    session = get_db_session()
+    rows_q = session.query(
+        ExcludedRepository.url,
+        ExcludedRepository.exclusion_reason,
+        ExcludedRepository.exclusion_stage,
+        ExcludedRepository.source,
+        ExcludedRepository.is_retryable,
+        ExcludedRepository.excluded_at,
+    ).order_by(ExcludedRepository.excluded_at.desc()).all()
+    rows = [
+        {
+            'url': r.url,
+            'exclusion_reason': r.exclusion_reason,
+            'exclusion_stage': r.exclusion_stage,
+            'source': r.source or 'unknown',
+            'retryable': r.is_retryable,
+            'excluded_at': r.excluded_at,
+        }
+        for r in rows_q
+    ]
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=300)
 def load_embeddings_for_viz(max_samples=5000):
     """Load embeddings for visualization (sample if too large)"""
     session = get_db_session()
@@ -220,19 +247,15 @@ def load_embeddings_for_viz(max_samples=5000):
     
     embeddings = np.array(embeddings)
     
-    # Get cluster assignments
-    assignments = {}
-    for header_id in header_ids:
-        assignment = session.query(HeaderClusterAssignment).filter_by(
-            header_id=header_id
-        ).first()
-        
-        if assignment:
-            cluster = session.query(Cluster).get(assignment.cluster_id)
-            assignments[header_id] = cluster.cluster_name if cluster else "Unassigned"
-        else:
-            assignments[header_id] = "Unassigned"
-    
+    # Get cluster assignments in one query (join) instead of N+1 per header
+    rows = (
+        session.query(HeaderClusterAssignment.header_id, Cluster.cluster_name)
+        .join(Cluster, HeaderClusterAssignment.cluster_id == Cluster.id)
+        .filter(HeaderClusterAssignment.header_id.in_(header_ids))
+        .all()
+    )
+    assignments = {r.header_id: r.cluster_name for r in rows}
+
     return header_ids, embeddings, assignments
 
 
@@ -255,21 +278,37 @@ def compute_umap(embeddings, n_components=2):
 def main():
     """Main dashboard"""
     
-    # Header
-    st.markdown('<div class="main-header">📊 README Header Clustering Analysis</div>', 
-                unsafe_allow_html=True)
-    
     # Sidebar
     st.sidebar.title("Navigation")
     page = st.sidebar.radio(
         "Select Page",
         ["Overview", "Cluster Explorer", "License Analysis", "Repository Browser", "Data Quality", "Visualization", "Search", "Export"]
     )
+
+    # Page title — dynamic per page
+    PAGE_TITLES = {
+        "Overview":            "📊 README Header Clustering Analysis",
+        "Cluster Explorer":    "🔍 Cluster Explorer",
+        "License Analysis":    "📄 License Analysis",
+        "Repository Browser":  "📚 Repository Browser",
+        "Data Quality":        "📋 Data Quality Report",
+        "Visualization":       "📊 Embedding Visualization",
+        "Search":              "🔎 Header Search",
+        "Export":              "📥 Export Results",
+    }
+    st.markdown(
+        f'<div class="main-header">{PAGE_TITLES.get(page, "README Header Clustering Analysis")}</div>',
+        unsafe_allow_html=True,
+    )
     
     # Load data
     stats = load_overview_stats()
     
     st.sidebar.markdown("---")
+    if st.sidebar.button("🔄 Refresh Data"):
+        st.cache_data.clear()
+        st.rerun()
+
     st.sidebar.markdown("### Dataset Statistics")
     st.sidebar.metric("Repositories", f"{stats['total_repos']:,}")
     st.sidebar.metric("Headers", f"{stats['total_headers']:,}")
@@ -330,8 +369,7 @@ def main():
 
 def show_overview(stats):
     """Overview page"""
-    st.header("📈 Overview")
-    
+
     # Metrics
     col1, col2, col3, col4 = st.columns(4)
     
@@ -423,7 +461,6 @@ def show_overview(stats):
 
 def show_cluster_explorer(run_id):
     """Cluster explorer page"""
-    st.header("🔍 Cluster Explorer")
 
     cluster_df = load_cluster_data(run_id)
 
@@ -467,8 +504,7 @@ def show_cluster_explorer(run_id):
 
 def show_visualization():
     """Visualization page"""
-    st.header("📊 Embedding Visualization")
-    
+
     st.info("⚠️ Loading and projecting embeddings may take a minute...")
     
     # Options
@@ -538,8 +574,7 @@ def show_visualization():
 
 def show_search():
     """Search page"""
-    st.header("🔎 Search Headers")
-    
+
     session = get_db_session()
     
     search_query = st.text_input("Search for headers", "")
@@ -549,20 +584,23 @@ def show_search():
         results = session.query(ReadmeHeader).filter(
             ReadmeHeader.normalized_text.contains(search_query.lower())
         ).limit(100).all()
-        
+
         st.markdown(f"**Found {len(results)} results** (showing top 100)")
-        
+
+        # Resolve cluster names in one query instead of one per result
+        result_ids = [r.id for r in results]
+        cluster_map: dict[int, str] = {}
+        if result_ids:
+            rows = (
+                session.query(HeaderClusterAssignment.header_id, Cluster.cluster_name)
+                .join(Cluster, HeaderClusterAssignment.cluster_id == Cluster.id)
+                .filter(HeaderClusterAssignment.header_id.in_(result_ids))
+                .all()
+            )
+            cluster_map = {r.header_id: r.cluster_name for r in rows}
+
         for result in results:
-            # Get cluster assignment
-            assignment = session.query(HeaderClusterAssignment).filter_by(
-                header_id=result.id
-            ).first()
-            
-            cluster_name = "Unassigned"
-            if assignment:
-                cluster = session.query(Cluster).get(assignment.cluster_id)
-                cluster_name = cluster.cluster_name if cluster else "Unknown"
-            
+            cluster_name = cluster_map.get(result.id, "Unassigned")
             with st.expander(f"`{result.header_text}` → **{cluster_name}**"):
                 st.markdown(f"**Header ID:** {result.id}")
                 st.markdown(f"**Repository ID:** {result.repository_id}")
@@ -573,7 +611,6 @@ def show_search():
 
 def show_export(run_id):
     """Export page"""
-    st.header("📥 Export Results")
 
     cluster_df = load_cluster_data(run_id)
 
@@ -649,7 +686,6 @@ def show_export(run_id):
 
 def show_license_analysis():
     """License analysis page"""
-    st.header("📄 License Analysis")
 
     license_df = load_license_data()
 
@@ -730,7 +766,6 @@ def show_license_analysis():
 
 def show_repository_browser():
     """Repository browser page"""
-    st.header("📚 Repository Browser")
 
     repo_df = load_repository_details()
 
@@ -751,7 +786,7 @@ def show_repository_browser():
     st.markdown("---")
     st.subheader("🔍 Filters")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         selected_license = st.selectbox(
             "License", ['All'] + sorted(repo_df['license'].unique().tolist()))
@@ -759,6 +794,9 @@ def show_repository_browser():
         selected_language = st.selectbox(
             "Language", ['All'] + sorted(repo_df['language'].unique().tolist()))
     with col3:
+        source_options = ['All'] + sorted(repo_df['source'].unique().tolist())
+        selected_source = st.selectbox("Source", source_options)
+    with col4:
         search_term = st.text_input("Search by name", "")
 
     filtered = repo_df.copy()
@@ -766,6 +804,8 @@ def show_repository_browser():
         filtered = filtered[filtered['license'] == selected_license]
     if selected_language != 'All':
         filtered = filtered[filtered['language'] == selected_language]
+    if selected_source != 'All':
+        filtered = filtered[filtered['source'] == selected_source]
     if search_term:
         filtered = filtered[filtered['name'].str.contains(search_term, case=False, na=False)]
 
@@ -773,22 +813,25 @@ def show_repository_browser():
     with col1:
         st.markdown(f"**Showing {len(filtered):,} of {len(repo_df):,} repositories**")
     with col2:
-        sort_by = st.selectbox("Sort by", ["Name", "Stars", "License"])
+        sort_by = st.selectbox("Sort by", ["Name", "Stars", "License", "Source"])
 
     if sort_by == "Stars":
         filtered = filtered.sort_values('stars', ascending=False)
     elif sort_by == "License":
         filtered = filtered.sort_values('license')
+    elif sort_by == "Source":
+        filtered = filtered.sort_values('source')
     else:
         filtered = filtered.sort_values('name')
 
     st.dataframe(
-        filtered[['name', 'license', 'language', 'stars', 'url']].head(500),
+        filtered[['name', 'license', 'language', 'stars', 'source', 'url']].head(500),
         column_config={
             "name":     st.column_config.TextColumn("Repository", width="medium"),
             "license":  st.column_config.TextColumn("License",    width="medium"),
             "language": st.column_config.TextColumn("Language",   width="small"),
             "stars":    st.column_config.NumberColumn("⭐ Stars",  width="small"),
+            "source":   st.column_config.TextColumn("Source",     width="small"),
             "url":      st.column_config.LinkColumn("Link",        width="medium"),
         },
         hide_index=True, use_container_width=True, height=600
@@ -816,10 +859,56 @@ def show_repository_browser():
         file_name="repository_list.csv", mime="text/csv"
     )
 
+    # ── Excluded Repositories ─────────────────────────────────────────────
+    st.markdown("---")
+    excl_df = load_excluded_repos()
+    with st.expander(f"🚫 Excluded Repositories ({len(excl_df):,} total)", expanded=False):
+        if excl_df.empty:
+            st.info("No excluded repositories recorded.")
+        else:
+            excl_col1, excl_col2, excl_col3 = st.columns(3)
+            with excl_col1:
+                excl_source = st.selectbox(
+                    "Filter by source", ['All'] + sorted(excl_df['source'].unique().tolist()),
+                    key="excl_source")
+            with excl_col2:
+                excl_stage = st.selectbox(
+                    "Filter by stage", ['All'] + sorted(excl_df['exclusion_stage'].unique().tolist()),
+                    key="excl_stage")
+            with excl_col3:
+                excl_search = st.text_input("Search URL", "", key="excl_search")
+
+            excl_filtered = excl_df.copy()
+            if excl_source != 'All':
+                excl_filtered = excl_filtered[excl_filtered['source'] == excl_source]
+            if excl_stage != 'All':
+                excl_filtered = excl_filtered[excl_filtered['exclusion_stage'] == excl_stage]
+            if excl_search:
+                excl_filtered = excl_filtered[
+                    excl_filtered['url'].str.contains(excl_search, case=False, na=False)]
+
+            st.markdown(f"**Showing {len(excl_filtered):,} of {len(excl_df):,} excluded repositories**")
+            st.dataframe(
+                excl_filtered[['url', 'exclusion_reason', 'exclusion_stage', 'source', 'retryable', 'excluded_at']].head(500),
+                column_config={
+                    "url":               st.column_config.LinkColumn("URL",             width="large"),
+                    "exclusion_reason":  st.column_config.TextColumn("Reason",          width="large"),
+                    "exclusion_stage":   st.column_config.TextColumn("Stage",           width="small"),
+                    "source":            st.column_config.TextColumn("Source",          width="small"),
+                    "retryable":         st.column_config.CheckboxColumn("Retryable",   width="small"),
+                    "excluded_at":       st.column_config.DatetimeColumn("Excluded At", width="medium"),
+                },
+                hide_index=True, use_container_width=True, height=400
+            )
+            excl_csv = excl_filtered.to_csv(index=False)
+            st.download_button(
+                label=f"Download {len(excl_filtered)} Excluded Repos (CSV)", data=excl_csv,
+                file_name="excluded_repositories.csv", mime="text/csv"
+            )
+
 
 def show_data_quality():
     """Data quality and processing transparency report"""
-    st.header("📋 Data Quality Report")
 
     session = get_db_session()
     total_repos      = session.query(Repository).count()
@@ -836,10 +925,13 @@ def show_data_quality():
     repos_without_readme = total_repos - total_readmes
     avg_headers = total_headers / total_readmes if total_readmes > 0 else 0
 
-    # The original scraping count from the source CSV
-    ORIGINAL_SCRAPED = 4266
-    invalid_removed  = max(ORIGINAL_SCRAPED - total_repos, 0)
-    retention        = total_repos / ORIGINAL_SCRAPED * 100
+    # Total attempted = repos in DB + excluded repos (dynamic, not hardcoded)
+    total_excluded   = session.execute(
+        text("SELECT COUNT(*) FROM excluded_repositories")
+    ).scalar() or 0
+    ORIGINAL_SCRAPED = total_repos + total_excluded
+    invalid_removed  = total_excluded
+    retention        = total_repos / ORIGINAL_SCRAPED * 100 if ORIGINAL_SCRAPED else 100.0
     readme_coverage  = total_readmes / total_repos * 100 if total_repos else 0
     cluster_coverage = total_clustered / total_headers * 100 if total_headers else 0
 
