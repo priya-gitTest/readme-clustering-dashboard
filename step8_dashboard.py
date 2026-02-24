@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Research Dashboard: README Header Clustering Analysis
-Interactive visualization and exploration of clustering results
+Research Software Metadata Analyser
+Interactive visualization and exploration of research software metadata
 """
 import streamlit as st
 import streamlit.components.v1 as components
@@ -31,7 +31,7 @@ if 'DATABASE_URL' in st.secrets:
     
 # Page config
 st.set_page_config(
-    page_title="README Clustering Analysis",
+    page_title="Research Software Metadata Analyser",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -358,7 +358,7 @@ def main():
 
     # Page title — dynamic per page
     PAGE_TITLES = {
-        "Overview":            "📊 README Header Clustering Analysis",
+        "Overview":            "📊 Research Software Metadata Analyser",
         "Cluster Explorer":    "🔍 Cluster Explorer",
         "License Analysis":    "📄 License Analysis",
         "Repository Browser":  "📚 Repository Browser",
@@ -370,7 +370,7 @@ def main():
         "Architecture":        "🏗️ Architecture",
     }
     st.markdown(
-        f'<div class="main-header">{PAGE_TITLES.get(page, "README Header Clustering Analysis")}</div>',
+        f'<div class="main-header">{PAGE_TITLES.get(page, "Research Software Metadata Analyser")}</div>',
         unsafe_allow_html=True,
     )
     
@@ -404,7 +404,7 @@ def main():
     If you use this work, please cite:
     ```
     [Your Name] (2026)
-    README Header Clustering Analysis
+    Research Software Metadata Analyser
     AI-Assisted Code Metadata Pipeline
     ```
     
@@ -437,7 +437,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666; padding: 2rem;'>
-        <p><strong>README Header Clustering Analysis Dashboard</strong></p>
+        <p><strong>Research Software Metadata Analyser</strong></p>
         <p>Analyzing documentation structure patterns in research software</p>
         <p>© 2026 | MIT License | <a href='https://github.com/your-username/your-repo'>View on GitHub</a></p>
     </div>
@@ -726,7 +726,7 @@ def show_export(run_id):
     stats = load_overview_stats()
     
     summary = f"""
-## README Header Clustering Analysis
+## Research Software Metadata Analyser
 
 **Date:** {pd.Timestamp.now().strftime('%Y-%m-%d')}
 **Run ID:** {run_id}
