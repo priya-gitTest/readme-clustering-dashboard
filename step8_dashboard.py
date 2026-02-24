@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from database import get_session
+from database import get_session_context
 from database.models import (
     Repository, ReadmeHeader, HeaderEmbedding,
     Cluster, HeaderClusterAssignment, ExcludedRepository, SomefResult,
@@ -71,76 +71,62 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-@st.cache_resource
-def get_db_session():
-    """Get database session (cached)"""
-    return get_session()
-
-
 @st.cache_data(ttl=300)
 def load_overview_stats():
     """Load overview statistics"""
-    session = get_db_session()
-    
-    stats = {
-        'total_repos': session.query(Repository).count(),
-        'total_headers': session.query(ReadmeHeader).count(),
-        'total_embeddings': session.query(HeaderEmbedding).count(),
-        'total_clusters': session.query(Cluster).count(),
-        'total_assignments': session.query(HeaderClusterAssignment).count(),
-    }
-    
-    # Get latest run
-    latest_run = session.query(Cluster.run_id).order_by(
-        Cluster.created_at.desc()
-    ).first()
-    
-    if latest_run:
-        stats['run_id'] = latest_run[0]
-    
+    with get_session_context() as session:
+        stats = {
+            'total_repos': session.query(Repository).count(),
+            'total_headers': session.query(ReadmeHeader).count(),
+            'total_embeddings': session.query(HeaderEmbedding).count(),
+            'total_clusters': session.query(Cluster).count(),
+            'total_assignments': session.query(HeaderClusterAssignment).count(),
+        }
+
+        latest_run = session.query(Cluster.run_id).order_by(
+            Cluster.created_at.desc()
+        ).first()
+        if latest_run:
+            stats['run_id'] = latest_run[0]
+
     return stats
 
 
 @st.cache_data(ttl=300)
 def load_cluster_data(run_id=None):
     """Load cluster information"""
-    session = get_db_session()
-    
-    query = session.query(Cluster).order_by(Cluster.cluster_size.desc())
-    
-    if run_id:
-        query = query.filter_by(run_id=run_id)
-    
-    clusters = query.all()
-    
-    cluster_data = []
-    for c in clusters:
-        rep_headers = json.loads(c.representative_headers)
-        cluster_data.append({
-            'id': c.id,
-            'cluster_id': c.cluster_id,
-            'name': c.cluster_name,
-            'size': c.cluster_size,
-            'representative_headers': rep_headers,
-            'sample': rep_headers[0] if rep_headers else "N/A"
-        })
-    
+    with get_session_context() as session:
+        query = session.query(Cluster).order_by(Cluster.cluster_size.desc())
+        if run_id:
+            query = query.filter_by(run_id=run_id)
+        clusters = query.all()
+        cluster_data = []
+        for c in clusters:
+            rep_headers = json.loads(c.representative_headers)
+            cluster_data.append({
+                'id': c.id,
+                'cluster_id': c.cluster_id,
+                'name': c.cluster_name,
+                'size': c.cluster_size,
+                'representative_headers': rep_headers,
+                'sample': rep_headers[0] if rep_headers else "N/A"
+            })
     return pd.DataFrame(cluster_data)
 
 
 @st.cache_data(ttl=300)
 def load_license_data():
     """Load per-repo license information from the repositories table."""
-    session = get_db_session()
-    repos = session.query(Repository).all()
-    rows = []
-    for repo in repos:
-        lic = getattr(repo, 'license_from_api', None)
-        rows.append({
-            'name': repo.name,
-            'url': repo.url,
-            'license': lic if lic and lic != 'NOASSERTION' else 'No License',
-        })
+    with get_session_context() as session:
+        repos = session.query(Repository).all()
+        rows = []
+        for repo in repos:
+            lic = getattr(repo, 'license_from_api', None)
+            rows.append({
+                'name': repo.name,
+                'url': repo.url,
+                'license': lic if lic and lic != 'NOASSERTION' else 'No License',
+            })
     return pd.DataFrame(rows)
 
 
@@ -169,88 +155,84 @@ def categorize_license(license_name):
 @st.cache_data(ttl=300)
 def load_repository_details():
     """Load full repository rows for the browser page."""
-    session = get_db_session()
-    repos = session.query(Repository).all()
-    rows = []
-    for repo in repos:
-        lic = getattr(repo, 'license_from_api', None)
-        desc = getattr(repo, 'description', '') or ''
-        rows.append({
-            'name': repo.name,
-            'url': repo.url,
-            'license': lic if lic and lic != 'NOASSERTION' else 'No License',
-            'stars': getattr(repo, 'stars', 0) or 0,
-            'language': getattr(repo, 'language', 'Unknown') or 'Unknown',
-            'description': desc[:100] + '...' if len(desc) > 100 else desc,
-            'source': getattr(repo, 'source', None) or 'unknown',
-        })
+    with get_session_context() as session:
+        repos = session.query(Repository).all()
+        rows = []
+        for repo in repos:
+            lic = getattr(repo, 'license_from_api', None)
+            desc = getattr(repo, 'description', '') or ''
+            rows.append({
+                'name': repo.name,
+                'url': repo.url,
+                'license': lic if lic and lic != 'NOASSERTION' else 'No License',
+                'stars': getattr(repo, 'stars', 0) or 0,
+                'language': getattr(repo, 'language', 'Unknown') or 'Unknown',
+                'description': desc[:100] + '...' if len(desc) > 100 else desc,
+                'source': getattr(repo, 'source', None) or 'unknown',
+            })
     return pd.DataFrame(rows)
 
 
 @st.cache_data(ttl=300)
 def load_excluded_repos():
     """Load excluded repositories for the browser page."""
-    session = get_db_session()
-    rows_q = session.query(
-        ExcludedRepository.url,
-        ExcludedRepository.exclusion_reason,
-        ExcludedRepository.exclusion_stage,
-        ExcludedRepository.source,
-        ExcludedRepository.is_retryable,
-        ExcludedRepository.excluded_at,
-    ).order_by(ExcludedRepository.excluded_at.desc()).all()
-    rows = [
-        {
-            'url': r.url,
-            'exclusion_reason': r.exclusion_reason,
-            'exclusion_stage': r.exclusion_stage,
-            'source': r.source or 'unknown',
-            'retryable': r.is_retryable,
-            'excluded_at': r.excluded_at,
-        }
-        for r in rows_q
-    ]
+    with get_session_context() as session:
+        rows_q = session.query(
+            ExcludedRepository.url,
+            ExcludedRepository.exclusion_reason,
+            ExcludedRepository.exclusion_stage,
+            ExcludedRepository.source,
+            ExcludedRepository.is_retryable,
+            ExcludedRepository.excluded_at,
+        ).order_by(ExcludedRepository.excluded_at.desc()).all()
+        rows = [
+            {
+                'url': r.url,
+                'exclusion_reason': r.exclusion_reason,
+                'exclusion_stage': r.exclusion_stage,
+                'source': r.source or 'unknown',
+                'retryable': r.is_retryable,
+                'excluded_at': r.excluded_at,
+            }
+            for r in rows_q
+        ]
     return pd.DataFrame(rows)
 
 
 @st.cache_data(ttl=300)
 def load_unsupported_repos():
     """Load unsupported-platform repositories for the browser page."""
-    session = get_db_session()
     try:
-        rows_q = session.query(
-            UnsupportedRepository.url,
-            UnsupportedRepository.source,
-            UnsupportedRepository.host,
-            UnsupportedRepository.platform,
-            UnsupportedRepository.occurrence_count,
-            UnsupportedRepository.first_seen_at,
-            UnsupportedRepository.last_seen_at,
-        ).order_by(
-            UnsupportedRepository.occurrence_count.desc(),
-            UnsupportedRepository.host,
-        ).all()
+        with get_session_context() as session:
+            rows_q = session.query(
+                UnsupportedRepository.url,
+                UnsupportedRepository.source,
+                UnsupportedRepository.host,
+                UnsupportedRepository.platform,
+                UnsupportedRepository.occurrence_count,
+                UnsupportedRepository.first_seen_at,
+                UnsupportedRepository.last_seen_at,
+            ).order_by(
+                UnsupportedRepository.occurrence_count.desc(),
+                UnsupportedRepository.host,
+            ).all()
+            rows = [
+                {
+                    "url":       r.url,
+                    "source":    r.source,
+                    "host":      r.host,
+                    "platform":  r.platform,
+                    "seen":      r.occurrence_count,
+                    "first_seen": r.first_seen_at,
+                    "last_seen": r.last_seen_at,
+                }
+                for r in rows_q
+            ]
     except Exception:
         # Table may not exist yet on first run before migration.
-        # Rollback is required to clear the failed transaction from the
-        # shared session, otherwise every subsequent query hits PendingRollbackError.
-        try:
-            session.rollback()
-        except Exception:
-            pass
+        # get_session_context() auto-rolls back on exception so no shared
+        # session is left in a failed state.
         return pd.DataFrame()
-    rows = [
-        {
-            "url":              r.url,
-            "source":           r.source,
-            "host":             r.host,
-            "platform":         r.platform,
-            "seen":             r.occurrence_count,
-            "first_seen":       r.first_seen_at,
-            "last_seen":        r.last_seen_at,
-        }
-        for r in rows_q
-    ]
     return pd.DataFrame(rows)
 
 
@@ -262,50 +244,48 @@ def load_somef_stats():
         "requirement", "documentation", "contributor", "license",
         "usage", "acknowledgement", "run", "support",
     ]
-    session = get_db_session()
-    total = session.query(SomefResult).count()
-    if total == 0:
-        return {"total": 0, "categories": CATEGORIES}
+    with get_session_context() as session:
+        total = session.query(SomefResult).count()
+        if total == 0:
+            return {"total": 0, "categories": CATEGORIES}
 
-    errors = session.query(SomefResult).filter(SomefResult.error.isnot(None)).count()
+        errors = session.query(SomefResult).filter(SomefResult.error.isnot(None)).count()
 
-    # Per-category coverage: count rows where the column is non-null
-    cat_counts = {}
-    for cat in CATEGORIES:
-        col = getattr(SomefResult, cat)
-        cat_counts[cat] = session.query(SomefResult).filter(col.isnot(None)).count()
+        cat_counts = {}
+        for cat in CATEGORIES:
+            col = getattr(SomefResult, cat)
+            cat_counts[cat] = session.query(SomefResult).filter(col.isnot(None)).count()
 
-    # Per-repo summary table
-    rows_q = (
-        session.query(
-            Repository.name,
-            Repository.url,
-            SomefResult.categories_found,
-            SomefResult.processing_time_s,
-            SomefResult.somef_version,
-            SomefResult.error,
-            SomefResult.run_date,
+        rows_q = (
+            session.query(
+                Repository.name,
+                Repository.url,
+                SomefResult.categories_found,
+                SomefResult.processing_time_s,
+                SomefResult.somef_version,
+                SomefResult.error,
+                SomefResult.run_date,
+            )
+            .join(SomefResult, SomefResult.repository_id == Repository.id)
+            .all()
         )
-        .join(SomefResult, SomefResult.repository_id == Repository.id)
-        .all()
-    )
 
-    rows = []
-    for name, url, cats_json, proc_time, version, error, run_date in rows_q:
-        try:
-            cats = json.loads(cats_json) if cats_json else []
-        except (ValueError, TypeError):
-            cats = []
-        rows.append({
-            "name":            name,
-            "url":             url,
-            "categories_found": len(cats),
-            "categories":      ", ".join(cats) if cats else "",
-            "processing_s":    round(proc_time, 1) if proc_time else None,
-            "somef_version":   version,
-            "error":           error,
-            "run_date":        run_date,
-        })
+        rows = []
+        for name, url, cats_json, proc_time, version, error, run_date in rows_q:
+            try:
+                cats = json.loads(cats_json) if cats_json else []
+            except (ValueError, TypeError):
+                cats = []
+            rows.append({
+                "name":             name,
+                "url":              url,
+                "categories_found": len(cats),
+                "categories":       ", ".join(cats) if cats else "",
+                "processing_s":     round(proc_time, 1) if proc_time else None,
+                "somef_version":    version,
+                "error":            error,
+                "run_date":         run_date,
+            })
 
     df = pd.DataFrame(rows)
     avg_cats = df["categories_found"].mean() if not df.empty else 0
@@ -325,47 +305,40 @@ def load_somef_stats():
 @st.cache_data(ttl=300)
 def load_embeddings_for_viz(max_samples=5000):
     """Load embeddings for visualization (sample if too large)"""
-    session = get_db_session()
-    
-    # Get total count
-    total = session.query(HeaderEmbedding).count()
-    
-    # Sample if needed
-    if total > max_samples:
-        # Random sampling
-        query = session.query(
-            HeaderEmbedding.header_id,
-            HeaderEmbedding.embedding_vector,
-            HeaderEmbedding.embedding_dim
-        ).order_by(func.random()).limit(max_samples)
-    else:
-        query = session.query(
-            HeaderEmbedding.header_id,
-            HeaderEmbedding.embedding_vector,
-            HeaderEmbedding.embedding_dim
+    with get_session_context() as session:
+        total = session.query(HeaderEmbedding).count()
+
+        if total > max_samples:
+            query = session.query(
+                HeaderEmbedding.header_id,
+                HeaderEmbedding.embedding_vector,
+                HeaderEmbedding.embedding_dim
+            ).order_by(func.random()).limit(max_samples)
+        else:
+            query = session.query(
+                HeaderEmbedding.header_id,
+                HeaderEmbedding.embedding_vector,
+                HeaderEmbedding.embedding_dim
+            )
+
+        data = query.all()
+
+        header_ids = []
+        embeddings = []
+        for header_id, emb_bytes, dim in data:
+            header_ids.append(header_id)
+            emb_array = np.frombuffer(emb_bytes, dtype=np.float32)
+            embeddings.append(emb_array)
+
+        embeddings = np.array(embeddings)
+
+        rows = (
+            session.query(HeaderClusterAssignment.header_id, Cluster.cluster_name)
+            .join(Cluster, HeaderClusterAssignment.cluster_id == Cluster.id)
+            .filter(HeaderClusterAssignment.header_id.in_(header_ids))
+            .all()
         )
-    
-    data = query.all()
-    
-    # Convert to arrays
-    header_ids = []
-    embeddings = []
-    
-    for header_id, emb_bytes, dim in data:
-        header_ids.append(header_id)
-        emb_array = np.frombuffer(emb_bytes, dtype=np.float32)
-        embeddings.append(emb_array)
-    
-    embeddings = np.array(embeddings)
-    
-    # Get cluster assignments in one query (join) instead of N+1 per header
-    rows = (
-        session.query(HeaderClusterAssignment.header_id, Cluster.cluster_name)
-        .join(Cluster, HeaderClusterAssignment.cluster_id == Cluster.id)
-        .filter(HeaderClusterAssignment.header_id.in_(header_ids))
-        .all()
-    )
-    assignments = {r.header_id: r.cluster_name for r in rows}
+        assignments = {r.header_id: r.cluster_name for r in rows}
 
     return header_ids, embeddings, assignments
 
@@ -694,38 +667,46 @@ def show_visualization():
 def show_search():
     """Search page"""
 
-    session = get_db_session()
-    
     search_query = st.text_input("Search for headers", "")
-    
+
     if search_query:
-        # Search headers
-        results = session.query(ReadmeHeader).filter(
-            ReadmeHeader.normalized_text.contains(search_query.lower())
-        ).limit(100).all()
+        # Collect all data within the session context, then render UI outside
+        display_results = []
+        with get_session_context() as session:
+            results = session.query(ReadmeHeader).filter(
+                ReadmeHeader.normalized_text.contains(search_query.lower())
+            ).limit(100).all()
 
-        st.markdown(f"**Found {len(results)} results** (showing top 100)")
+            result_ids = [r.id for r in results]
+            cluster_map: dict[int, str] = {}
+            if result_ids:
+                rows = (
+                    session.query(HeaderClusterAssignment.header_id, Cluster.cluster_name)
+                    .join(Cluster, HeaderClusterAssignment.cluster_id == Cluster.id)
+                    .filter(HeaderClusterAssignment.header_id.in_(result_ids))
+                    .all()
+                )
+                cluster_map = {r.header_id: r.cluster_name for r in rows}
 
-        # Resolve cluster names in one query instead of one per result
-        result_ids = [r.id for r in results]
-        cluster_map: dict[int, str] = {}
-        if result_ids:
-            rows = (
-                session.query(HeaderClusterAssignment.header_id, Cluster.cluster_name)
-                .join(Cluster, HeaderClusterAssignment.cluster_id == Cluster.id)
-                .filter(HeaderClusterAssignment.header_id.in_(result_ids))
-                .all()
-            )
-            cluster_map = {r.header_id: r.cluster_name for r in rows}
+            # Convert to plain dicts before session closes
+            for result in results:
+                display_results.append({
+                    "id":            result.id,
+                    "header_text":   result.header_text,
+                    "repository_id": result.repository_id,
+                    "level":         result.level,
+                    "position":      result.position,
+                    "cluster":       cluster_map.get(result.id, "Unassigned"),
+                })
 
-        for result in results:
-            cluster_name = cluster_map.get(result.id, "Unassigned")
-            with st.expander(f"`{result.header_text}` → **{cluster_name}**"):
-                st.markdown(f"**Header ID:** {result.id}")
-                st.markdown(f"**Repository ID:** {result.repository_id}")
-                st.markdown(f"**Level:** H{result.level}")
-                st.markdown(f"**Position:** {result.position}")
-                st.markdown(f"**Cluster:** {cluster_name}")
+        st.markdown(f"**Found {len(display_results)} results** (showing top 100)")
+        for r in display_results:
+            with st.expander(f"`{r['header_text']}` → **{r['cluster']}**"):
+                st.markdown(f"**Header ID:** {r['id']}")
+                st.markdown(f"**Repository ID:** {r['repository_id']}")
+                st.markdown(f"**Level:** H{r['level']}")
+                st.markdown(f"**Position:** {r['position']}")
+                st.markdown(f"**Cluster:** {r['cluster']}")
 
 
 def show_export(run_id):
@@ -1129,13 +1110,16 @@ def show_repository_browser():
 def show_data_quality():
     """Data quality and processing transparency report"""
 
-    session = get_db_session()
-    total_repos      = session.query(Repository).count()
-    total_readmes    = session.query(ReadmeHeader.repository_id).distinct().count()
-    total_headers    = session.query(ReadmeHeader).count()
-    total_embeddings = session.query(HeaderEmbedding).count()
-    total_clustered  = session.query(HeaderClusterAssignment).count()
-    total_clusters   = session.query(Cluster).count()
+    with get_session_context() as session:
+        total_repos      = session.query(Repository).count()
+        total_readmes    = session.query(ReadmeHeader.repository_id).distinct().count()
+        total_headers    = session.query(ReadmeHeader).count()
+        total_embeddings = session.query(HeaderEmbedding).count()
+        total_clustered  = session.query(HeaderClusterAssignment).count()
+        total_clusters   = session.query(Cluster).count()
+        total_excluded   = session.execute(
+            text("SELECT COUNT(*) FROM excluded_repositories")
+        ).scalar() or 0
 
     if total_repos == 0:
         st.info("No data yet — run the pipeline first.")
@@ -1143,11 +1127,6 @@ def show_data_quality():
 
     repos_without_readme = total_repos - total_readmes
     avg_headers = total_headers / total_readmes if total_readmes > 0 else 0
-
-    # Total attempted = repos in DB + excluded repos (dynamic, not hardcoded)
-    total_excluded   = session.execute(
-        text("SELECT COUNT(*) FROM excluded_repositories")
-    ).scalar() or 0
     ORIGINAL_SCRAPED = total_repos + total_excluded
     invalid_removed  = total_excluded
     retention        = total_repos / ORIGINAL_SCRAPED * 100 if ORIGINAL_SCRAPED else 100.0
