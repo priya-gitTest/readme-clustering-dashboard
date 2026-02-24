@@ -437,7 +437,7 @@ def main():
     **Citation:**  
     If you use this work, please cite:
     ```
-    [Your Name] (2026)
+    [Priyanka Ojha] [ORCID](https://orcid.org/0000-0002-6844-6493) (2026)
     Research Software Metadata Analyser
     AI-Assisted Code Metadata Pipeline
     ```
