@@ -385,8 +385,8 @@ def main():
     st.sidebar.title("Navigation")
     page = st.sidebar.radio(
         "Select Page",
-        ["Overview", "Cluster Explorer", "License Analysis", "Repository Browser",
-         "SOMEF Validation", "Data Quality", "Visualization", "Search", "Export",
+        ["Overview", "Repository Browser", "License Analysis", "Data Quality",
+         "Search", "Cluster Explorer", "SOMEF Validation", "Visualization", "Export",
          "Architecture"]
     )
 
