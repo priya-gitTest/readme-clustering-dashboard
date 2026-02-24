@@ -355,7 +355,7 @@ class SomefResult(Base):
     id              = Column(Integer, primary_key=True, autoincrement=True)
     repository_id   = Column(Integer, ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False)
     run_date        = Column(DateTime, default=datetime.utcnow)
-    somef_version   = Column(String(20))
+    somef_version   = Column(String(50))
 
     # SOMEF extraction categories (JSON: [{excerpt, confidence}])
     description     = Column(Text)

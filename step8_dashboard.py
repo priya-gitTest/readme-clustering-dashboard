@@ -453,11 +453,11 @@ def main():
     elif page == "Cluster Explorer":
         show_cluster_explorer(stats.get('run_id'))
     elif page == "License Analysis":
-        show_license_analysis(stats.get('run_id'))
+        show_license_analysis()
     elif page == "Repository Browser":
-        show_repository_browser(stats.get('run_id'))
+        show_repository_browser()
     elif page == "SOMEF Validation":
-        show_somef_validation(stats.get('run_id'))
+        show_somef_validation()
     elif page == "Data Quality":
         show_data_quality()
     elif page == "Visualization":
@@ -602,7 +602,7 @@ def show_cluster_explorer(run_id):
     st.markdown(f"**Showing {len(cluster_df)} clusters**")
     
     # Display clusters
-    for idx, row in cluster_df.iterrows():
+    for _, row in cluster_df.iterrows():
         with st.expander(f"**{row['name']}** ({row['size']} headers)"):
             st.markdown(f"**Cluster ID:** {row['cluster_id']}")
             st.markdown(f"**Size:** {row['size']} headers")
@@ -781,11 +781,11 @@ def show_export(run_id):
 ### Dataset
 - **Repositories Analyzed:** {stats['total_repos']:,}
 - **Headers Extracted:** {stats['total_headers']:,}
-- **Average Headers per Repository:** {stats['total_headers']/stats['total_repos']:.1f if stats['total_repos'] > 0 else 0.0}
+- **Average Headers per Repository:** {(stats['total_headers']/stats['total_repos'] if stats['total_repos'] > 0 else 0.0):.1f}
 
 ### Clustering Results
 - **Number of Clusters:** {stats['total_clusters']}
-- **Headers Clustered:** {stats['total_assignments']:,} ({stats['total_assignments']/stats['total_headers']*100:.1f if stats['total_headers'] > 0 else 0.0}%)
+- **Headers Clustered:** {stats['total_assignments']:,} ({(stats['total_assignments']/stats['total_headers']*100 if stats['total_headers'] > 0 else 0.0):.1f}%)
 - **Average Cluster Size:** {cluster_df['size'].mean():.0f}
 - **Median Cluster Size:** {cluster_df['size'].median():.0f}
 
@@ -808,7 +808,7 @@ def show_export(run_id):
     )
 
 
-def show_license_analysis(run_id=None):
+def show_license_analysis():
     """License analysis page"""
 
     ts = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
@@ -863,11 +863,8 @@ def show_license_analysis(run_id=None):
                 hide_index=True,
             )
 
-            _dl = no_lic_df.copy()
-            if run_id:
-                _dl['run_id'] = run_id
             st.download_button(
-                "Download list (CSV)", data=_dl.to_csv(index=False),
+                "Download list (CSV)", data=no_lic_df.to_csv(index=False),
                 file_name=f"repos_without_license_{ts}.csv", mime="text/csv",
                 key="no_lic_csv_dl",
             )
@@ -917,16 +914,13 @@ def show_license_analysis(run_id=None):
             st.metric(category, f"{count:,}", delta=f"{pct:.1f}%")
 
     st.markdown("---")
-    _dl = license_df.copy()
-    if run_id:
-        _dl['run_id'] = run_id
     st.download_button(
-        label="Download License Report (CSV)", data=_dl.to_csv(index=False),
+        label="Download License Report (CSV)", data=license_df.to_csv(index=False),
         file_name=f"license_analysis_{ts}.csv", mime="text/csv"
     )
 
 
-def show_repository_browser(run_id=None):
+def show_repository_browser():
     """Repository browser page"""
 
     ts = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
@@ -1016,11 +1010,9 @@ def show_repository_browser(run_id=None):
             st.write(f"- **{lic}**: {count} repos")
 
     st.markdown("---")
-    _dl = filtered.drop(columns=['domain'], errors='ignore').copy()
-    if run_id:
-        _dl['run_id'] = run_id
     st.download_button(
-        label=f"Download {len(filtered)} Repositories (CSV)", data=_dl.to_csv(index=False),
+        label=f"Download {len(filtered)} Repositories (CSV)",
+        data=filtered.drop(columns=['domain'], errors='ignore').to_csv(index=False),
         file_name=f"repository_list_{ts}.csv", mime="text/csv"
     )
 
@@ -1065,12 +1057,9 @@ def show_repository_browser(run_id=None):
                 },
                 hide_index=True, use_container_width=True, height=400
             )
-            _excl_dl = excl_filtered.copy()
-            if run_id:
-                _excl_dl['run_id'] = run_id
             st.download_button(
                 label=f"Download {len(excl_filtered)} Excluded Repos (CSV)",
-                data=_excl_dl.to_csv(index=False),
+                data=excl_filtered.to_csv(index=False),
                 file_name=f"excluded_repositories_{ts}.csv", mime="text/csv"
             )
 
@@ -1166,12 +1155,9 @@ def show_repository_browser(run_id=None):
             if len(unsup_filtered) > 500:
                 st.info("Showing first 500 results. Use filters to narrow down.")
 
-            _unsup_dl = unsup_filtered.copy()
-            if run_id:
-                _unsup_dl['run_id'] = run_id
             st.download_button(
                 label=f"Download {len(unsup_filtered)} Unsupported Repos (CSV)",
-                data=_unsup_dl.to_csv(index=False),
+                data=unsup_filtered.to_csv(index=False),
                 file_name=f"unsupported_repositories_{ts}.csv",
                 mime="text/csv",
             )
@@ -1305,7 +1291,7 @@ Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
     )
 
 
-def show_somef_validation(run_id=None):
+def show_somef_validation():
     """SOMEF metadata extraction results page."""
     ts = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
     data = load_somef_stats()
@@ -1396,11 +1382,9 @@ def show_somef_validation(run_id=None):
     )
 
     st.markdown("---")
-    _dl = filtered.drop(columns=["run_date"], errors="ignore").copy()
-    if run_id:
-        _dl['run_id'] = run_id
     st.download_button(
-        label=f"Download {len(filtered)} SOMEF Results (CSV)", data=_dl.to_csv(index=False),
+        label=f"Download {len(filtered)} SOMEF Results (CSV)",
+        data=filtered.drop(columns=["run_date"], errors="ignore").to_csv(index=False),
         file_name=f"somef_results_{ts}.csv", mime="text/csv",
     )
 
