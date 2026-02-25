@@ -364,6 +364,41 @@ def load_embeddings_for_viz(max_samples=5000):
     return header_ids, embeddings, assignments
 
 
+@st.cache_data(ttl=300)
+def load_gap_analysis_data():
+    """Load cluster_codemeta_mappings and unmapped_clusters for the Gap Analysis page."""
+    with get_session_context() as session:
+        # ── Mapped clusters ────────────────────────────────────────────────
+        mapped_rows = session.execute(text("""
+            SELECT c.cluster_name, c.cluster_size,
+                   m.codemeta_property, m.confidence, m.mapping_method
+              FROM cluster_codemeta_mappings m
+              JOIN clusters c ON c.id = m.cluster_id
+             ORDER BY c.cluster_size DESC
+        """)).fetchall()
+
+        # ── Unmapped clusters ──────────────────────────────────────────────
+        unmapped_rows = session.execute(text("""
+            SELECT c.cluster_name, c.cluster_size,
+                   u.proposed_property_name, u.priority, u.status, u.justification
+              FROM unmapped_clusters u
+              JOIN clusters c ON c.id = u.cluster_id
+             ORDER BY
+                 CASE u.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+                 c.cluster_size DESC
+        """)).fetchall()
+
+    mapped_df = pd.DataFrame(mapped_rows, columns=[
+        "cluster_name", "cluster_size", "codemeta_property", "confidence", "mapping_method"
+    ]) if mapped_rows else pd.DataFrame()
+
+    unmapped_df = pd.DataFrame(unmapped_rows, columns=[
+        "cluster_name", "cluster_size", "proposed_property_name", "priority", "status", "justification"
+    ]) if unmapped_rows else pd.DataFrame()
+
+    return mapped_df, unmapped_df
+
+
 @st.cache_data
 def compute_umap(embeddings, n_components=2):
     """Compute UMAP projection"""
@@ -388,8 +423,8 @@ def main():
     page = st.sidebar.radio(
         "Select Page",
         ["Overview", "Repository Browser", "License Analysis", "Data Quality",
-         "Search", "Cluster Explorer", "SOMEF Validation", "Visualization", "Export",
-         "Architecture"]
+         "Search", "Cluster Explorer", "SOMEF Validation", "Gap Analysis",
+         "Visualization", "Export", "Architecture"]
     )
 
     # Page title — dynamic per page
@@ -402,6 +437,7 @@ def main():
         "Visualization":       "📊 Embedding Visualization",
         "Search":              "🔎 Header Search",
         "SOMEF Validation":    "🔬 SOMEF Metadata Validation",
+        "Gap Analysis":        "🗺️ CodeMeta Gap Analysis",
         "Export":              "📥 Export Results",
         "Architecture":        "🏗️ Architecture",
     }
@@ -458,6 +494,8 @@ def main():
         show_repository_browser()
     elif page == "SOMEF Validation":
         show_somef_validation()
+    elif page == "Gap Analysis":
+        show_gap_analysis()
     elif page == "Data Quality":
         show_data_quality()
     elif page == "Visualization":
@@ -1604,6 +1642,179 @@ erDiagram
 """
 
 
+def show_gap_analysis():
+    """CodeMeta Gap Analysis page — mapped clusters and identified gaps."""
+
+    mapped_df, unmapped_df = load_gap_analysis_data()
+
+    if mapped_df.empty and unmapped_df.empty:
+        st.info(
+            "No gap analysis data yet. "
+            "Run **Step 11 — CodeMeta Gap Analysis** workflow first."
+        )
+        return
+
+    total_clusters = len(mapped_df) + len(unmapped_df)
+    n_mapped   = len(mapped_df)
+    n_unmapped = len(unmapped_df)
+    pct_mapped = n_mapped / total_clusters * 100 if total_clusters else 0
+
+    # ── Summary metrics ───────────────────────────────────────────────────
+    st.subheader("📊 Summary")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Clusters", total_clusters)
+    with col2:
+        st.metric("Mapped to CodeMeta", n_mapped,
+                  delta=f"{pct_mapped:.0f}% of clusters")
+    with col3:
+        st.metric("Unmapped Gaps", n_unmapped,
+                  delta=f"{100 - pct_mapped:.0f}% of clusters",
+                  delta_color="inverse")
+    with col4:
+        high_pri = len(unmapped_df[unmapped_df["priority"] == "high"]) if not unmapped_df.empty else 0
+        st.metric("High-Priority Gaps", high_pri)
+
+    st.markdown("---")
+
+    # ── Section 1: CodeMeta property coverage ────────────────────────────
+    st.subheader("📌 CodeMeta Property Coverage")
+    st.caption(
+        "Each bar shows the total number of README headers (cluster_size) "
+        "covered by that CodeMeta property across all mapped clusters."
+    )
+
+    if not mapped_df.empty:
+        coverage = (
+            mapped_df.groupby("codemeta_property")["cluster_size"]
+            .sum()
+            .reset_index()
+            .rename(columns={"cluster_size": "headers_covered"})
+            .sort_values("headers_covered", ascending=True)
+        )
+        fig = px.bar(
+            coverage,
+            x="headers_covered",
+            y="codemeta_property",
+            orientation="h",
+            color="headers_covered",
+            color_continuous_scale="Blues",
+            labels={"headers_covered": "README Headers Covered",
+                    "codemeta_property": "CodeMeta Property"},
+            height=max(300, len(coverage) * 35),
+        )
+        fig.update_layout(
+            coloraxis_showscale=False,
+            margin=dict(l=10, r=10, t=10, b=10),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+
+    # ── Section 2 & 3 in two columns ─────────────────────────────────────
+    left, right = st.columns([3, 2])
+
+    with left:
+        st.subheader("✅ Mapped Clusters")
+        st.caption("Clusters classified to an existing CodeMeta property.")
+        if not mapped_df.empty:
+            display_mapped = mapped_df.copy()
+            display_mapped["confidence"] = display_mapped["confidence"].map(
+                lambda x: f"{x:.0%}"
+            )
+            st.dataframe(
+                display_mapped.rename(columns={
+                    "cluster_name":      "Cluster",
+                    "cluster_size":      "Headers",
+                    "codemeta_property": "CodeMeta Property",
+                    "confidence":        "Confidence",
+                    "mapping_method":    "Method",
+                })[["Cluster", "Headers", "CodeMeta Property", "Confidence", "Method"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    with right:
+        st.subheader("🔍 Gap Clusters (Unmapped)")
+        st.caption("No existing CodeMeta property covers these concepts.")
+        if not unmapped_df.empty:
+            PRIORITY_COLOUR = {"high": "🔴", "medium": "🟡", "low": "🟢"}
+            display_unmapped = unmapped_df.copy()
+            display_unmapped["priority"] = display_unmapped["priority"].map(
+                lambda p: f"{PRIORITY_COLOUR.get(p, '')} {p}"
+            )
+            st.dataframe(
+                display_unmapped.rename(columns={
+                    "cluster_name":           "Cluster",
+                    "cluster_size":           "Headers",
+                    "proposed_property_name": "Proposed Property",
+                    "priority":               "Priority",
+                })[["Cluster", "Headers", "Proposed Property", "Priority"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    st.markdown("---")
+
+    # ── Section 3: Gap treemap ────────────────────────────────────────────
+    if not unmapped_df.empty:
+        st.subheader("🗺️ Gap Map — Size of Undocumented Concepts")
+        st.caption(
+            "Each tile is an unmapped cluster. Size = number of README headers "
+            "in that cluster. Larger tiles = more researchers document this concept "
+            "but CodeMeta has no property for it."
+        )
+        treemap_df = unmapped_df.copy()
+        treemap_df["label"] = treemap_df.apply(
+            lambda r: f"{r['cluster_name']}<br>{r['cluster_size']:,} headers", axis=1
+        )
+        PRIORITY_ORDER = {"high": 1, "medium": 2, "low": 3}
+        treemap_df["priority_order"] = treemap_df["priority"].map(PRIORITY_ORDER)
+
+        fig2 = px.treemap(
+            treemap_df,
+            path=["priority", "cluster_name"],
+            values="cluster_size",
+            color="priority",
+            color_discrete_map={"high": "#e74c3c", "medium": "#f39c12", "low": "#27ae60"},
+            custom_data=["proposed_property_name", "cluster_size"],
+            height=420,
+        )
+        fig2.update_traces(
+            hovertemplate=(
+                "<b>%{label}</b><br>"
+                "Headers: %{customdata[1]:,}<br>"
+                "Proposed property: <i>%{customdata[0]}</i>"
+                "<extra></extra>"
+            )
+        )
+        fig2.update_layout(margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig2, use_container_width=True)
+
+    st.markdown("---")
+
+    # ── Download ──────────────────────────────────────────────────────────
+    st.subheader("📥 Export")
+    ts = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        if not mapped_df.empty:
+            st.download_button(
+                "Download Mapped Clusters (CSV)",
+                data=mapped_df.to_csv(index=False),
+                file_name=f"codemeta_mapped_{ts}.csv",
+                mime="text/csv",
+            )
+    with dl2:
+        if not unmapped_df.empty:
+            st.download_button(
+                "Download Gap Clusters (CSV)",
+                data=unmapped_df.drop(columns=["justification"]).to_csv(index=False),
+                file_name=f"codemeta_gaps_{ts}.csv",
+                mime="text/csv",
+            )
+
+
 def show_architecture():
     """Architecture diagrams — pipeline flow and database ERD."""
     st.markdown(
@@ -1623,8 +1834,8 @@ def show_architecture():
     st.subheader("🗄️ Database Schema (ERD)")
     st.caption(
         "All 15 database tables with key columns and foreign-key relationships. "
-        "Tables shown with dashed borders (cluster_codemeta_mappings, "
-        "cluster_reuse_scenarios, unmapped_clusters) are schema-ready but not yet populated."
+        "cluster_codemeta_mappings and unmapped_clusters are populated by Step 11 "
+        "(Gap Analysis). cluster_reuse_scenarios is schema-ready for future use."
     )
     _render_mermaid(ERD_DIAGRAM, height=900)
 
