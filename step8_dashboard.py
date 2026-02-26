@@ -1506,12 +1506,16 @@ flowchart TD
     SOMEF metadata extraction"]
     S7 --> SOMEF[(somef_results)]
 
-    META & LIC & CLUST & SOMEF --> S8["Step 8 — step8_dashboard.py
+    CLUST --> S11["Step 11 — step11_gap_analysis.py
+    CodeMeta gap analysis
+    keyword + alias matching"]
+    S11 --> GAP[(cluster_codemeta_mappings
+    unmapped_clusters)]
+
+    META & LIC & CLUST & SOMEF & GAP --> S8["Step 8 — step8_dashboard.py
     Streamlit interactive dashboard"]
 
-    CLUST -.->|future Steps 9-11| FUTURE["cluster_codemeta_mappings
-    cluster_reuse_scenarios
-    unmapped_clusters"]
+    CLUST -.->|future: Step 10| FUTURE10["cluster_reuse_scenarios"]
 """
 
 ERD_DIAGRAM = """
@@ -1826,7 +1830,7 @@ def show_architecture():
     st.subheader("🔄 Pipeline Flow")
     st.caption(
         "End-to-end flow from input sources through all pipeline steps to the dashboard. "
-        "Dashed arrow indicates planned future steps."
+        "Dashed arrow indicates the planned Step 10 (reuse scenario tagging)."
     )
     _render_mermaid(PIPELINE_DIAGRAM, height=780)
 
