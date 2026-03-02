@@ -443,3 +443,27 @@ class UnsupportedRepository(Base):
         Index("idx_unsupported_platform", "platform"),
         Index("idx_unsupported_source",   "source"),
     )
+
+
+class ClusterKSearchResult(Base):
+    """Stores the per-k inertia + silhouette results from the K-selection sweep.
+
+    One row per (run_id, k) value tried during --search-k in step6_clustering.py.
+    Allows the dashboard to render elbow / silhouette charts and surface the
+    data-driven k choice to reviewers.
+    """
+
+    __tablename__ = "cluster_k_search_results"
+
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    run_id           = Column(String(50), nullable=False)
+    k                = Column(Integer, nullable=False)
+    inertia          = Column(Float)
+    silhouette_score = Column(Float)
+    is_best          = Column(Boolean, default=False)
+    created_at       = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "k", name="uq_k_search_run_k"),
+        Index("idx_k_search_run", "run_id"),
+    )

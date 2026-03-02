@@ -21,7 +21,7 @@ from database import get_session
 from database.models import (
     Repository, ReadmeHeader, HeaderEmbedding,
     Cluster, HeaderClusterAssignment, ExcludedRepository, SomefResult,
-    UnsupportedRepository,
+    UnsupportedRepository, ClusterKSearchResult,
 )
 from sqlalchemy import func, text
 
@@ -147,6 +147,34 @@ def load_cluster_members(cluster_db_id: int, limit: int = 20):
             .all()
         )
         return [(r.header_text, r.distance) for r in rows]
+
+
+@st.cache_data(ttl=300)
+def load_k_search_results(run_id=None):
+    """Load k-selection sweep results for the given run_id (or the latest run)."""
+    with get_session_context() as session:
+        query = session.query(ClusterKSearchResult)
+        if run_id:
+            query = query.filter_by(run_id=run_id)
+        else:
+            # Fall back to the most recent run that has k-search data
+            latest = (
+                session.query(ClusterKSearchResult.run_id)
+                .order_by(ClusterKSearchResult.created_at.desc())
+                .first()
+            )
+            if latest:
+                query = query.filter_by(run_id=latest[0])
+        rows = query.order_by(ClusterKSearchResult.k.asc()).all()
+        return pd.DataFrame([
+            {
+                'k': r.k,
+                'inertia': r.inertia,
+                'silhouette': r.silhouette_score,
+                'is_best': r.is_best,
+            }
+            for r in rows
+        ])
 
 
 @st.cache_data(ttl=300)
@@ -661,8 +689,8 @@ whitespace before embedding.
 - Embeddings were L2-normalised so that Euclidean distance approximates
   cosine similarity, making the clusters topic-based rather than length-based
 - `random_state = 42` was set for reproducibility
-- k = {total_clusters} was selected as an initial working value; a formal
-  elbow / silhouette analysis to justify or refine this choice is planned
+- k = {total_clusters} was selected via a silhouette + inertia sweep
+  (see the **K-selection analysis** chart below)
 
 **Cluster names**
 
@@ -670,9 +698,69 @@ Each cluster was labelled automatically by taking the most central header
 (closest to the K-Means centroid) as a representative name.
 """)
 
+    # ── K-selection analysis chart ───────────────────────────────────────────
+    st.subheader("K-selection analysis")
+    k_df = load_k_search_results(run_id)
+
+    if k_df.empty:
+        st.info(
+            "No k-selection data yet — re-run Step 6 with `--search-k` "
+            "(already enabled in the weekly workflow) to generate this chart."
+        )
+    else:
+        best_row = k_df[k_df['is_best']].iloc[0] if k_df['is_best'].any() else None
+        best_k   = int(best_row['k']) if best_row is not None else None
+
+        # Dual-axis chart: inertia (bar, left) + silhouette (line, right)
+        fig = go.Figure()
+
+        fig.add_trace(go.Bar(
+            x=k_df['k'], y=k_df['inertia'],
+            name='Inertia (within-cluster variance)',
+            marker_color='steelblue', opacity=0.6,
+            yaxis='y1',
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=k_df['k'], y=k_df['silhouette'],
+            name='Silhouette score',
+            mode='lines+markers',
+            line=dict(color='darkorange', width=2),
+            marker=dict(size=7),
+            yaxis='y2',
+        ))
+
+        if best_k is not None:
+            fig.add_vline(
+                x=best_k, line_dash='dash', line_color='green',
+                annotation_text=f"Best k={best_k}",
+                annotation_position='top right',
+            )
+
+        fig.update_layout(
+            title='K-Means k-selection: inertia (elbow) vs silhouette score',
+            xaxis=dict(title='Number of clusters (k)', dtick=k_df['k'].diff().median()),
+            yaxis=dict(title='Inertia', side='left', showgrid=False),
+            yaxis2=dict(title='Silhouette score', side='right', overlaying='y',
+                        showgrid=True, range=[0, max(0.5, k_df['silhouette'].max() * 1.1)]),
+            legend=dict(orientation='h', yanchor='bottom', y=1.02),
+            height=400,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        if best_k is not None:
+            best_sil = float(k_df[k_df['is_best']]['silhouette'].iloc[0])
+            st.caption(
+                f"k = **{best_k}** was selected as the value with the highest "
+                f"silhouette score ({best_sil:.4f}) across the sweep. "
+                f"Silhouette ranges from -1 (poor) to 1 (perfect separation); "
+                f"values above 0.1 indicate meaningful cluster structure for "
+                f"high-dimensional text embeddings."
+            )
+
     # Filters
     col1, col2 = st.columns([2, 1])
-    
+
     with col1:
         search_term = st.text_input("🔎 Search clusters by name", "")
     
