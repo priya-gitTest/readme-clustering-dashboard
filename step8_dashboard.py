@@ -709,8 +709,8 @@ whitespace before embedding.
 
 **Cluster names**
 
-Each cluster was labelled automatically by taking the most central header
-(closest to the K-Means centroid) as a representative name.
+Each cluster was labelled automatically by finding the 5 headers closest to the K-Means centroid,
+then selecting the 3 most frequently occurring words across those headers as the cluster name.
 """)
 
     # ── K-selection analysis chart ───────────────────────────────────────────
