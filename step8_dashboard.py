@@ -134,6 +134,22 @@ def load_cluster_data(run_id=None):
 
 
 @st.cache_data(ttl=300)
+def load_cluster_members(cluster_db_id: int, limit: int = 20):
+    """Load actual member headers for a cluster, ordered by distance to centroid.
+    Refreshed automatically on each workflow run (ttl=300s cache)."""
+    with get_session_context() as session:
+        rows = (
+            session.query(ReadmeHeader.header_text, HeaderClusterAssignment.distance)
+            .join(HeaderClusterAssignment, HeaderClusterAssignment.header_id == ReadmeHeader.id)
+            .filter(HeaderClusterAssignment.cluster_id == cluster_db_id)
+            .order_by(HeaderClusterAssignment.distance.asc())
+            .limit(limit)
+            .all()
+        )
+        return [(r.header_text, r.distance) for r in rows]
+
+
+@st.cache_data(ttl=300)
 def load_license_data():
     """Load per-repo license information from the repositories table."""
     with get_session_context() as session:
@@ -679,13 +695,17 @@ Each cluster was labelled automatically by taking the most central header
         with st.expander(f"**{row['name']}** ({row['size']} headers)"):
             st.markdown(f"**Cluster ID:** {row['cluster_id']}")
             st.markdown(f"**Size:** {row['size']} headers")
-            
-            st.markdown("**Representative Headers:**")
-            for i, header in enumerate(row['representative_headers'][:10], 1):
-                st.markdown(f"{i}. `{header}`")
-            
-            if len(row['representative_headers']) > 10:
-                st.markdown(f"*... and {len(row['representative_headers']) - 10} more*")
+
+            st.markdown("**20 most representative headers (closest to cluster centre):**")
+            members = load_cluster_members(int(row['id']), limit=20)
+            if members:
+                for i, (header_text, dist) in enumerate(members, 1):
+                    dist_str = f"  <span style='color:grey;font-size:0.8em'>dist={dist:.3f}</span>" if dist is not None else ""
+                    st.markdown(f"{i}. `{header_text}`{dist_str}", unsafe_allow_html=True)
+            else:
+                # fallback: use stored representative headers if live query returns nothing
+                for i, header in enumerate(row['representative_headers'][:20], 1):
+                    st.markdown(f"{i}. `{header}`")
 
 
 def show_visualization():
