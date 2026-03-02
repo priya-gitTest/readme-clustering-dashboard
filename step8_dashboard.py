@@ -159,32 +159,37 @@ def load_cluster_members(cluster_db_id: int, limit: int = 20):
 
 @st.cache_data(ttl=300)
 def load_k_search_results(run_id=None):
-    """Load k-selection sweep results for the given run_id (or the latest run)."""
+    """Load k-selection sweep results for the given run_id (or the latest run).
+    Returns an empty DataFrame if the table doesn't exist yet (pre-migration 007)."""
     if not _k_search_available:
         return pd.DataFrame()
-    with get_session_context() as session:
-        query = session.query(ClusterKSearchResult)
-        if run_id:
-            query = query.filter_by(run_id=run_id)
-        else:
-            # Fall back to the most recent run that has k-search data
-            latest = (
-                session.query(ClusterKSearchResult.run_id)
-                .order_by(ClusterKSearchResult.created_at.desc())
-                .first()
-            )
-            if latest:
-                query = query.filter_by(run_id=latest[0])
-        rows = query.order_by(ClusterKSearchResult.k.asc()).all()
-        return pd.DataFrame([
-            {
-                'k': r.k,
-                'inertia': r.inertia,
-                'silhouette': r.silhouette_score,
-                'is_best': r.is_best,
-            }
-            for r in rows
-        ])
+    try:
+        with get_session_context() as session:
+            query = session.query(ClusterKSearchResult)
+            if run_id:
+                query = query.filter_by(run_id=run_id)
+            else:
+                # Fall back to the most recent run that has k-search data
+                latest = (
+                    session.query(ClusterKSearchResult.run_id)
+                    .order_by(ClusterKSearchResult.created_at.desc())
+                    .first()
+                )
+                if latest:
+                    query = query.filter_by(run_id=latest[0])
+            rows = query.order_by(ClusterKSearchResult.k.asc()).all()
+            return pd.DataFrame([
+                {
+                    'k': r.k,
+                    'inertia': r.inertia,
+                    'silhouette': r.silhouette_score,
+                    'is_best': r.is_best,
+                }
+                for r in rows
+            ])
+    except Exception:
+        # Table doesn't exist yet (migration 007 pending) — show info in UI instead
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=300)
