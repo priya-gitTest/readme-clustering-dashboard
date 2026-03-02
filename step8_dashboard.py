@@ -21,8 +21,16 @@ from database import get_session
 from database.models import (
     Repository, ReadmeHeader, HeaderEmbedding,
     Cluster, HeaderClusterAssignment, ExcludedRepository, SomefResult,
-    UnsupportedRepository, ClusterKSearchResult,
+    UnsupportedRepository,
 )
+# ClusterKSearchResult was added in migration 007 — import gracefully so the
+# dashboard keeps working on deployments where the migration hasn't run yet.
+try:
+    from database.models import ClusterKSearchResult
+    _k_search_available = True
+except ImportError:
+    ClusterKSearchResult = None  # type: ignore
+    _k_search_available = False
 from sqlalchemy import func, text
 
 import os
@@ -152,6 +160,8 @@ def load_cluster_members(cluster_db_id: int, limit: int = 20):
 @st.cache_data(ttl=300)
 def load_k_search_results(run_id=None):
     """Load k-selection sweep results for the given run_id (or the latest run)."""
+    if not _k_search_available:
+        return pd.DataFrame()
     with get_session_context() as session:
         query = session.query(ClusterKSearchResult)
         if run_id:
