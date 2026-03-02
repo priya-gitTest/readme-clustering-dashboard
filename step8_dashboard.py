@@ -619,6 +619,41 @@ def show_cluster_explorer(run_id):
         st.info("No cluster data yet — run the full pipeline first.")
         return
 
+    # ── Methodology / rationale ──────────────────────────────────────────────
+    with st.expander("ℹ️ About this analysis", expanded=False):
+        total_headers   = sum(cluster_df['size'])
+        total_clusters  = len(cluster_df)
+        avg_size        = cluster_df['size'].mean()
+
+        st.markdown(f"""
+**What was clustered**
+
+README section headers were extracted from {total_clusters} clusters covering
+**{total_headers:,} headers** (average {avg_size:.0f} per cluster).
+Each header was normalised to lowercase and stripped of leading/trailing
+whitespace before embedding.
+
+**Embedding model — `all-MiniLM-L6-v2`**
+
+- Architecture: 6-layer MiniLM Transformer, 384-dimensional sentence vectors
+- Training: fine-tuned on 1 billion sentence pairs for semantic similarity
+- Chosen because it is fast, lightweight, and well-suited to short-text inputs
+  such as README section headers (typically 2–8 words)
+
+**Clustering algorithm — K-Means (k = {total_clusters})**
+
+- Embeddings were L2-normalised so that Euclidean distance approximates
+  cosine similarity, making the clusters topic-based rather than length-based
+- `random_state = 42` was set for reproducibility
+- k = {total_clusters} was selected as an initial working value; a formal
+  elbow / silhouette analysis to justify or refine this choice is planned
+
+**Cluster names**
+
+Each cluster was labelled automatically by taking the most central header
+(closest to the K-Means centroid) as a representative name.
+""")
+
     # Filters
     col1, col2 = st.columns([2, 1])
     
