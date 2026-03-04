@@ -905,12 +905,24 @@ def show_search():
                 )
                 cluster_map = {r.header_id: r.cluster_name for r in rows}
 
+            # Fetch repo URLs in one query
+            repo_ids = list({r.repository_id for r in results})
+            url_map: dict[int, str] = {}
+            if repo_ids:
+                repo_rows = (
+                    session.query(Repository.id, Repository.url)
+                    .filter(Repository.id.in_(repo_ids))
+                    .all()
+                )
+                url_map = {r.id: r.url for r in repo_rows}
+
             # Convert to plain dicts before session closes
             for result in results:
                 display_results.append({
                     "id":            result.id,
                     "header_text":   result.header_text,
                     "repository_id": result.repository_id,
+                    "repo_url":      url_map.get(result.repository_id, ""),
                     "level":         result.level,
                     "position":      result.position,
                     "cluster":       cluster_map.get(result.id, "Unassigned"),
@@ -920,10 +932,15 @@ def show_search():
         for r in display_results:
             with st.expander(f"`{r['header_text']}` → **{r['cluster']}**"):
                 st.markdown(f"**Header ID:** {r['id']}")
-                st.markdown(f"**Repository ID:** {r['repository_id']}")
+                if r['repo_url']:
+                    st.markdown(f"**Repository:** [{r['repo_url']}]({r['repo_url']})")
+                else:
+                    st.markdown(f"**Repository ID:** {r['repository_id']}")
                 st.markdown(f"**Level:** H{r['level']}")
                 st.markdown(f"**Position:** {r['position']}")
                 st.markdown(f"**Cluster:** {r['cluster']}")
+                if r['cluster'] == "Unassigned" and r['level'] == 1:
+                    st.caption("ℹ️ H1 headers are excluded from clustering (typically project names).")
 
 
 def show_export(run_id):
