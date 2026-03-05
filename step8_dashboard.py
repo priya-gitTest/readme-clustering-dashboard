@@ -3,37 +3,47 @@
 Research Software Metadata Analyser
 Interactive visualization and exploration of research software metadata
 """
-import streamlit as st
-import streamlit.components.v1 as components
-import pandas as pd
+
+import json
+import sys
+from pathlib import Path
+from urllib.parse import urlparse
+
 import numpy as np
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from pathlib import Path
-import sys
-import json
-from urllib.parse import urlparse
+import streamlit as st
+import streamlit.components.v1 as components
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from contextlib import contextmanager
+
 from database import get_session
 from database.models import (
-    Repository, ReadmeHeader, HeaderEmbedding,
-    Cluster, HeaderClusterAssignment, ExcludedRepository, SomefResult,
+    Cluster,
+    ExcludedRepository,
+    HeaderClusterAssignment,
+    HeaderEmbedding,
+    ReadmeHeader,
+    Repository,
+    SomefResult,
     UnsupportedRepository,
 )
+
 # ClusterKSearchResult was added in migration 007 — import gracefully so the
 # dashboard keeps working on deployments where the migration hasn't run yet.
 try:
     from database.models import ClusterKSearchResult
+
     _k_search_available = True
 except ImportError:
     ClusterKSearchResult = None  # type: ignore
     _k_search_available = False
-from sqlalchemy import func, text
-
 import os
+
+from sqlalchemy import func, text
 
 
 @contextmanager
@@ -53,20 +63,22 @@ def get_session_context():
     finally:
         session.close()
 
+
 # Get database URL from Streamlit secrets or environment
-if 'DATABASE_URL' in st.secrets:
-    os.environ['DATABASE_URL'] = st.secrets['DATABASE_URL']
-    
+if "DATABASE_URL" in st.secrets:
+    os.environ["DATABASE_URL"] = st.secrets["DATABASE_URL"]
+
 # Page config
 st.set_page_config(
     page_title="Research Software Metadata Analyser",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 # Custom CSS
-st.markdown("""
+st.markdown(
+    """
 <style>
     .main-header {
         font-size: 3rem;
@@ -95,7 +107,9 @@ st.markdown("""
         font-size: 1.2rem;
     }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 
 @st.cache_data(ttl=300)
@@ -103,18 +117,16 @@ def load_overview_stats():
     """Load overview statistics"""
     with get_session_context() as session:
         stats = {
-            'total_repos': session.query(Repository).count(),
-            'total_headers': session.query(ReadmeHeader).count(),
-            'total_embeddings': session.query(HeaderEmbedding).count(),
-            'total_clusters': session.query(Cluster).count(),
-            'total_assignments': session.query(HeaderClusterAssignment).count(),
+            "total_repos": session.query(Repository).count(),
+            "total_headers": session.query(ReadmeHeader).count(),
+            "total_embeddings": session.query(HeaderEmbedding).count(),
+            "total_clusters": session.query(Cluster).count(),
+            "total_assignments": session.query(HeaderClusterAssignment).count(),
         }
 
-        latest_run = session.query(Cluster.run_id).order_by(
-            Cluster.created_at.desc()
-        ).first()
+        latest_run = session.query(Cluster.run_id).order_by(Cluster.created_at.desc()).first()
         if latest_run:
-            stats['run_id'] = latest_run[0]
+            stats["run_id"] = latest_run[0]
 
     return stats
 
@@ -130,14 +142,16 @@ def load_cluster_data(run_id=None):
         cluster_data = []
         for c in clusters:
             rep_headers = json.loads(c.representative_headers)
-            cluster_data.append({
-                'id': c.id,
-                'cluster_id': c.cluster_id,
-                'name': c.cluster_name,
-                'size': c.cluster_size,
-                'representative_headers': rep_headers,
-                'sample': rep_headers[0] if rep_headers else "N/A"
-            })
+            cluster_data.append(
+                {
+                    "id": c.id,
+                    "cluster_id": c.cluster_id,
+                    "name": c.cluster_name,
+                    "size": c.cluster_size,
+                    "representative_headers": rep_headers,
+                    "sample": rep_headers[0] if rep_headers else "N/A",
+                }
+            )
     return pd.DataFrame(cluster_data)
 
 
@@ -178,15 +192,17 @@ def load_k_search_results(run_id=None):
                 if latest:
                     query = query.filter_by(run_id=latest[0])
             rows = query.order_by(ClusterKSearchResult.k.asc()).all()
-            return pd.DataFrame([
-                {
-                    'k': r.k,
-                    'inertia': r.inertia,
-                    'silhouette': r.silhouette_score,
-                    'is_best': r.is_best,
-                }
-                for r in rows
-            ])
+            return pd.DataFrame(
+                [
+                    {
+                        "k": r.k,
+                        "inertia": r.inertia,
+                        "silhouette": r.silhouette_score,
+                        "is_best": r.is_best,
+                    }
+                    for r in rows
+                ]
+            )
     except Exception:
         # Table doesn't exist yet (migration 007 pending) — show info in UI instead
         return pd.DataFrame()
@@ -199,37 +215,54 @@ def load_license_data():
         repos = session.query(Repository).all()
         rows = []
         for repo in repos:
-            lic = getattr(repo, 'license_from_api', None)
-            rows.append({
-                'name': repo.name,
-                'url': repo.url,
-                'platform': repo.platform or '',
-                'source': repo.source or '',
-                'license': lic if lic and lic != 'NOASSERTION' else 'No License',
-            })
+            lic = getattr(repo, "license_from_api", None)
+            rows.append(
+                {
+                    "name": repo.name,
+                    "url": repo.url,
+                    "platform": repo.platform or "",
+                    "source": repo.source or "",
+                    "license": lic if lic and lic != "NOASSERTION" else "No License",
+                }
+            )
     return pd.DataFrame(rows)
 
 
 def categorize_license(license_name):
     """Map a raw SPDX id to a broad category string."""
-    if not license_name or license_name == 'No License':
-        return 'No License'
-    permissive    = ['MIT', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'ISC', 'Artistic',
-                     'Zlib', 'Python-2.0', 'PSF', 'WTFPL', '0BSD', 'CC0', 'Unlicense', 'BSL-1.0',
-                     'CC-BY-4.0', 'CC-BY-3.0']
-    weak_copyleft = ['LGPL', 'MPL-2.0', 'CDDL', 'EPL', 'EUPL', 'CC-BY-SA']
-    strong_copyleft = ['GPL-2.0', 'GPL-3.0', 'AGPL', 'CPAL', 'OSL']
+    if not license_name or license_name == "No License":
+        return "No License"
+    permissive = [
+        "MIT",
+        "Apache-2.0",
+        "BSD-2-Clause",
+        "BSD-3-Clause",
+        "ISC",
+        "Artistic",
+        "Zlib",
+        "Python-2.0",
+        "PSF",
+        "WTFPL",
+        "0BSD",
+        "CC0",
+        "Unlicense",
+        "BSL-1.0",
+        "CC-BY-4.0",
+        "CC-BY-3.0",
+    ]
+    weak_copyleft = ["LGPL", "MPL-2.0", "CDDL", "EPL", "EUPL", "CC-BY-SA"]
+    strong_copyleft = ["GPL-2.0", "GPL-3.0", "AGPL", "CPAL", "OSL"]
     u = license_name.upper()
     for p in strong_copyleft:
         if p.upper() in u:
-            return 'Strong Copyleft'
+            return "Strong Copyleft"
     for p in weak_copyleft:
         if p.upper() in u:
-            return 'Weak Copyleft'
+            return "Weak Copyleft"
     for p in permissive:
         if p.upper() in u:
-            return 'Permissive'
-    return 'Other'
+            return "Permissive"
+    return "Other"
 
 
 @st.cache_data(ttl=300)
@@ -239,17 +272,19 @@ def load_repository_details():
         repos = session.query(Repository).all()
         rows = []
         for repo in repos:
-            lic = getattr(repo, 'license_from_api', None)
-            desc = getattr(repo, 'description', '') or ''
-            rows.append({
-                'name': repo.name,
-                'url': repo.url,
-                'license': lic if lic and lic != 'NOASSERTION' else 'No License',
-                'stars': getattr(repo, 'stars', 0) or 0,
-                'language': getattr(repo, 'language', 'Unknown') or 'Unknown',
-                'description': desc[:100] + '...' if len(desc) > 100 else desc,
-                'source': getattr(repo, 'source', None) or 'unknown',
-            })
+            lic = getattr(repo, "license_from_api", None)
+            desc = getattr(repo, "description", "") or ""
+            rows.append(
+                {
+                    "name": repo.name,
+                    "url": repo.url,
+                    "license": lic if lic and lic != "NOASSERTION" else "No License",
+                    "stars": getattr(repo, "stars", 0) or 0,
+                    "language": getattr(repo, "language", "Unknown") or "Unknown",
+                    "description": desc[:100] + "..." if len(desc) > 100 else desc,
+                    "source": getattr(repo, "source", None) or "unknown",
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -257,22 +292,26 @@ def load_repository_details():
 def load_excluded_repos():
     """Load excluded repositories for the browser page."""
     with get_session_context() as session:
-        rows_q = session.query(
-            ExcludedRepository.url,
-            ExcludedRepository.exclusion_reason,
-            ExcludedRepository.exclusion_stage,
-            ExcludedRepository.source,
-            ExcludedRepository.is_retryable,
-            ExcludedRepository.excluded_at,
-        ).order_by(ExcludedRepository.excluded_at.desc()).all()
+        rows_q = (
+            session.query(
+                ExcludedRepository.url,
+                ExcludedRepository.exclusion_reason,
+                ExcludedRepository.exclusion_stage,
+                ExcludedRepository.source,
+                ExcludedRepository.is_retryable,
+                ExcludedRepository.excluded_at,
+            )
+            .order_by(ExcludedRepository.excluded_at.desc())
+            .all()
+        )
         rows = [
             {
-                'url': r.url,
-                'exclusion_reason': r.exclusion_reason,
-                'exclusion_stage': r.exclusion_stage,
-                'source': r.source or 'unknown',
-                'retryable': r.is_retryable,
-                'excluded_at': r.excluded_at,
+                "url": r.url,
+                "exclusion_reason": r.exclusion_reason,
+                "exclusion_stage": r.exclusion_stage,
+                "source": r.source or "unknown",
+                "retryable": r.is_retryable,
+                "excluded_at": r.excluded_at,
             }
             for r in rows_q
         ]
@@ -284,25 +323,29 @@ def load_unsupported_repos():
     """Load unsupported-platform repositories for the browser page."""
     try:
         with get_session_context() as session:
-            rows_q = session.query(
-                UnsupportedRepository.url,
-                UnsupportedRepository.source,
-                UnsupportedRepository.host,
-                UnsupportedRepository.platform,
-                UnsupportedRepository.occurrence_count,
-                UnsupportedRepository.first_seen_at,
-                UnsupportedRepository.last_seen_at,
-            ).order_by(
-                UnsupportedRepository.occurrence_count.desc(),
-                UnsupportedRepository.host,
-            ).all()
+            rows_q = (
+                session.query(
+                    UnsupportedRepository.url,
+                    UnsupportedRepository.source,
+                    UnsupportedRepository.host,
+                    UnsupportedRepository.platform,
+                    UnsupportedRepository.occurrence_count,
+                    UnsupportedRepository.first_seen_at,
+                    UnsupportedRepository.last_seen_at,
+                )
+                .order_by(
+                    UnsupportedRepository.occurrence_count.desc(),
+                    UnsupportedRepository.host,
+                )
+                .all()
+            )
             rows = [
                 {
-                    "url":       r.url,
-                    "source":    r.source,
-                    "host":      r.host,
-                    "platform":  r.platform,
-                    "seen":      r.occurrence_count,
+                    "url": r.url,
+                    "source": r.source,
+                    "host": r.host,
+                    "platform": r.platform,
+                    "seen": r.occurrence_count,
                     "first_seen": r.first_seen_at,
                     "last_seen": r.last_seen_at,
                 }
@@ -320,9 +363,18 @@ def load_unsupported_repos():
 def load_somef_stats():
     """Load SOMEF validation results for the SOMEF Validation page."""
     CATEGORIES = [
-        "description", "installation", "invocation", "citation",
-        "requirement", "documentation", "contributor", "license",
-        "usage", "acknowledgement", "run", "support",
+        "description",
+        "installation",
+        "invocation",
+        "citation",
+        "requirement",
+        "documentation",
+        "contributor",
+        "license",
+        "usage",
+        "acknowledgement",
+        "run",
+        "support",
     ]
     with get_session_context() as session:
         total = session.query(SomefResult).count()
@@ -356,29 +408,31 @@ def load_somef_stats():
                 cats = json.loads(cats_json) if cats_json else []
             except (ValueError, TypeError):
                 cats = []
-            rows.append({
-                "name":             name,
-                "url":              url,
-                "categories_found": len(cats),
-                "categories":       ", ".join(cats) if cats else "",
-                "processing_s":     round(proc_time, 1) if proc_time else None,
-                "somef_version":    version,
-                "error":            error,
-                "run_date":         run_date,
-            })
+            rows.append(
+                {
+                    "name": name,
+                    "url": url,
+                    "categories_found": len(cats),
+                    "categories": ", ".join(cats) if cats else "",
+                    "processing_s": round(proc_time, 1) if proc_time else None,
+                    "somef_version": version,
+                    "error": error,
+                    "run_date": run_date,
+                }
+            )
 
     df = pd.DataFrame(rows)
     avg_cats = df["categories_found"].mean() if not df.empty else 0
     avg_time = df["processing_s"].mean() if not df.empty else 0
 
     return {
-        "total":      total,
-        "errors":     errors,
-        "avg_cats":   avg_cats,
-        "avg_time":   avg_time,
+        "total": total,
+        "errors": errors,
+        "avg_cats": avg_cats,
+        "avg_time": avg_time,
         "cat_counts": cat_counts,
         "categories": CATEGORIES,
-        "df":         df,
+        "df": df,
     }
 
 
@@ -389,23 +443,27 @@ def load_embeddings_for_viz(max_samples=5000):
         total = session.query(HeaderEmbedding).count()
 
         if total > max_samples:
-            query = session.query(
-                HeaderEmbedding.header_id,
-                HeaderEmbedding.embedding_vector,
-                HeaderEmbedding.embedding_dim
-            ).order_by(func.random()).limit(max_samples)
+            query = (
+                session.query(
+                    HeaderEmbedding.header_id,
+                    HeaderEmbedding.embedding_vector,
+                    HeaderEmbedding.embedding_dim,
+                )
+                .order_by(func.random())
+                .limit(max_samples)
+            )
         else:
             query = session.query(
                 HeaderEmbedding.header_id,
                 HeaderEmbedding.embedding_vector,
-                HeaderEmbedding.embedding_dim
+                HeaderEmbedding.embedding_dim,
             )
 
         data = query.all()
 
         header_ids = []
         embeddings = []
-        for header_id, emb_bytes, dim in data:
+        for header_id, emb_bytes, _dim in data:
             header_ids.append(header_id)
             emb_array = np.frombuffer(emb_bytes, dtype=np.float32)
             embeddings.append(emb_array)
@@ -428,16 +486,19 @@ def load_gap_analysis_data():
     """Load cluster_codemeta_mappings and unmapped_clusters for the Gap Analysis page."""
     with get_session_context() as session:
         # ── Mapped clusters ────────────────────────────────────────────────
-        mapped_rows = session.execute(text("""
+        mapped_rows = session.execute(
+            text("""
             SELECT c.cluster_name, c.cluster_size,
                    m.codemeta_property, m.confidence, m.mapping_method
               FROM cluster_codemeta_mappings m
               JOIN clusters c ON c.id = m.cluster_id
              ORDER BY c.cluster_size DESC
-        """)).fetchall()
+        """)
+        ).fetchall()
 
         # ── Unmapped clusters ──────────────────────────────────────────────
-        unmapped_rows = session.execute(text("""
+        unmapped_rows = session.execute(
+            text("""
             SELECT c.cluster_name, c.cluster_size,
                    u.proposed_property_name, u.priority, u.status, u.justification
               FROM unmapped_clusters u
@@ -445,15 +506,39 @@ def load_gap_analysis_data():
              ORDER BY
                  CASE u.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
                  c.cluster_size DESC
-        """)).fetchall()
+        """)
+        ).fetchall()
 
-    mapped_df = pd.DataFrame(mapped_rows, columns=[
-        "cluster_name", "cluster_size", "codemeta_property", "confidence", "mapping_method"
-    ]) if mapped_rows else pd.DataFrame()
+    mapped_df = (
+        pd.DataFrame(
+            mapped_rows,
+            columns=[
+                "cluster_name",
+                "cluster_size",
+                "codemeta_property",
+                "confidence",
+                "mapping_method",
+            ],
+        )
+        if mapped_rows
+        else pd.DataFrame()
+    )
 
-    unmapped_df = pd.DataFrame(unmapped_rows, columns=[
-        "cluster_name", "cluster_size", "proposed_property_name", "priority", "status", "justification"
-    ]) if unmapped_rows else pd.DataFrame()
+    unmapped_df = (
+        pd.DataFrame(
+            unmapped_rows,
+            columns=[
+                "cluster_name",
+                "cluster_size",
+                "proposed_property_name",
+                "priority",
+                "status",
+                "justification",
+            ],
+        )
+        if unmapped_rows
+        else pd.DataFrame()
+    )
 
     return mapped_df, unmapped_df
 
@@ -462,52 +547,58 @@ def load_gap_analysis_data():
 def compute_umap(embeddings, n_components=2):
     """Compute UMAP projection"""
     from umap import UMAP
-    
+
     reducer = UMAP(
-        n_components=n_components,
-        n_neighbors=15,
-        min_dist=0.1,
-        metric='cosine',
-        random_state=42
+        n_components=n_components, n_neighbors=15, min_dist=0.1, metric="cosine", random_state=42
     )
-    
+
     return reducer.fit_transform(embeddings)
 
 
 def main():
     """Main dashboard"""
-    
+
     # Sidebar
     st.sidebar.title("Navigation")
     page = st.sidebar.radio(
         "Select Page",
-        ["Overview", "Repository Browser", "License Analysis", "Data Quality",
-         "Search", "Cluster Explorer", "SOMEF Validation", "Gap Analysis",
-         "Visualization", "Export", "Architecture"]
+        [
+            "Overview",
+            "Repository Browser",
+            "License Analysis",
+            "Data Quality",
+            "Search",
+            "Cluster Explorer",
+            "SOMEF Validation",
+            "Gap Analysis",
+            "Visualization",
+            "Export",
+            "Architecture",
+        ],
     )
 
     # Page title — dynamic per page
     PAGE_TITLES = {
-        "Overview":            "📊 Research Software Metadata Analyser",
-        "Cluster Explorer":    "🔍 Cluster Explorer",
-        "License Analysis":    "📄 License Analysis",
-        "Repository Browser":  "📚 Repository Browser",
-        "Data Quality":        "📋 Data Quality Report",
-        "Visualization":       "📊 Embedding Visualization",
-        "Search":              "🔎 Header Search",
-        "SOMEF Validation":    "🔬 SOMEF Metadata Validation",
-        "Gap Analysis":        "🗺️ CodeMeta Gap Analysis",
-        "Export":              "📥 Export Results",
-        "Architecture":        "🏗️ Architecture",
+        "Overview": "📊 Research Software Metadata Analyser",
+        "Cluster Explorer": "🔍 Cluster Explorer",
+        "License Analysis": "📄 License Analysis",
+        "Repository Browser": "📚 Repository Browser",
+        "Data Quality": "📋 Data Quality Report",
+        "Visualization": "📊 Embedding Visualization",
+        "Search": "🔎 Header Search",
+        "SOMEF Validation": "🔬 SOMEF Metadata Validation",
+        "Gap Analysis": "🗺️ CodeMeta Gap Analysis",
+        "Export": "📥 Export Results",
+        "Architecture": "🏗️ Architecture",
     }
     st.markdown(
         f'<div class="main-header">{PAGE_TITLES.get(page, "Research Software Metadata Analyser")}</div>',
         unsafe_allow_html=True,
     )
-    
+
     # Load data
     stats = load_overview_stats()
-    
+
     st.sidebar.markdown("---")
     if st.sidebar.button("🔄 Refresh Data"):
         st.cache_data.clear()
@@ -516,37 +607,37 @@ def main():
     st.sidebar.markdown("### Dataset Statistics")
     st.sidebar.metric("Repositories", f"{stats['total_repos']:,}")
     st.sidebar.metric("Headers", f"{stats['total_headers']:,}")
-    st.sidebar.metric("Clusters", stats['total_clusters'])
-    
-    if 'run_id' in stats:
+    st.sidebar.metric("Clusters", stats["total_clusters"])
+
+    if "run_id" in stats:
         st.sidebar.markdown(f"**Run ID:** `{stats['run_id']}`")
-    
+
     # License info in sidebar
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📄 License & Attribution")
     st.sidebar.markdown("""
-    **Research Project**  
+    **Research Project**
     AI-Assisted Code Metadata Pipeline
-    
-    **License:** MIT License  
+
+    **License:** MIT License
     **Data Source:** Research software repositories
-    
-    **Citation:**  
+
+    **Citation:**
     If you use this work, please cite:
     ```
     [Priyanka Ojha] [ORCID](https://orcid.org/0000-0002-6844-6493) (2026)
     Research Software Metadata Analyser
     AI-Assisted Code Metadata Pipeline
     ```
-    
+
     **Code:** [GitHub Repository](https://github.com/priya-gitTest/readme-clustering-dashboard)
     """)
-    
+
     # Page routing
     if page == "Overview":
         show_overview(stats)
     elif page == "Cluster Explorer":
-        show_cluster_explorer(stats.get('run_id'))
+        show_cluster_explorer(stats.get("run_id"))
     elif page == "License Analysis":
         show_license_analysis()
     elif page == "Repository Browser":
@@ -562,19 +653,22 @@ def main():
     elif page == "Search":
         show_search()
     elif page == "Export":
-        show_export(stats.get('run_id'))
+        show_export(stats.get("run_id"))
     elif page == "Architecture":
         show_architecture()
-    
+
     # Footer
     st.markdown("---")
-    st.markdown("""
+    st.markdown(
+        """
     <div style='text-align: center; color: #666; padding: 2rem;'>
         <p><strong>Research Software Metadata Analyser</strong></p>
         <p>Analyzing documentation structure patterns in research software</p>
         <p>© 2026 | MIT License | <a href='https://github.com/priya-gitTest/readme-clustering-dashboard'>View on GitHub</a></p>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
 
 def show_overview(stats):
@@ -582,45 +676,47 @@ def show_overview(stats):
 
     # Metrics
     col1, col2, col3, col4 = st.columns(4)
-    
+
     with col1:
         st.metric(
-            label="Repositories Analyzed",
-            value=f"{stats['total_repos']:,}",
-            delta="100% coverage"
+            label="Repositories Analyzed", value=f"{stats['total_repos']:,}", delta="100% coverage"
         )
-    
+
     with col2:
         st.metric(
             label="Headers Extracted",
             value=f"{stats['total_headers']:,}",
-            delta=f"{stats['total_headers']/stats['total_repos']:.1f} per repo" if stats['total_repos'] > 0 else "0.0 per repo"
+            delta=f"{stats['total_headers'] / stats['total_repos']:.1f} per repo"
+            if stats["total_repos"] > 0
+            else "0.0 per repo",
         )
-    
+
     with col3:
-        st.metric(
-            label="Clusters Discovered",
-            value=stats['total_clusters'],
-            delta="K-Means"
-        )
-    
+        st.metric(label="Clusters Discovered", value=stats["total_clusters"], delta="K-Means")
+
     with col4:
-        coverage = (stats['total_assignments'] / stats['total_headers'] * 100) if stats['total_headers'] > 0 else 0
+        coverage = (
+            (stats["total_assignments"] / stats["total_headers"] * 100)
+            if stats["total_headers"] > 0
+            else 0
+        )
         st.metric(
             label="Clustering Coverage",
             value=f"{coverage:.1f}%",
-            delta=f"{stats['total_assignments']:,} assigned"
+            delta=f"{stats['total_assignments']:,} assigned",
         )
-    
+
     st.markdown("---")
-    
+
     # Key findings
     st.subheader("🔍 Key Findings")
-    
-    cluster_df = load_cluster_data(stats.get('run_id'))
+
+    cluster_df = load_cluster_data(stats.get("run_id"))
 
     if cluster_df.empty:
-        st.info("No clustering data yet — the pipeline hasn't completed a full run. Check back after the next scheduled scrape.")
+        st.info(
+            "No clustering data yet — the pipeline hasn't completed a full run. Check back after the next scheduled scrape."
+        )
         return
 
     col1, col2 = st.columns(2)
@@ -631,13 +727,13 @@ def show_overview(stats):
 
         fig = px.bar(
             top_10,
-            x='size',
-            y='name',
-            orientation='h',
+            x="size",
+            y="name",
+            orientation="h",
             title="Cluster Sizes",
-            labels={'size': 'Number of Headers', 'name': 'Cluster'}
+            labels={"size": "Number of Headers", "name": "Cluster"},
         )
-        fig.update_layout(height=400, yaxis={'categoryorder':'total ascending'})
+        fig.update_layout(height=400, yaxis={"categoryorder": "total ascending"})
         st.plotly_chart(fig, use_container_width=True)
 
     with col2:
@@ -645,10 +741,10 @@ def show_overview(stats):
 
         fig = px.histogram(
             cluster_df,
-            x='size',
+            x="size",
             nbins=20,
             title="Distribution of Cluster Sizes",
-            labels={'size': 'Cluster Size', 'count': 'Frequency'}
+            labels={"size": "Cluster Size", "count": "Frequency"},
         )
         fig.update_layout(height=400)
         st.plotly_chart(fig, use_container_width=True)
@@ -680,37 +776,69 @@ def show_cluster_explorer(run_id):
 
     # ── Methodology / rationale ──────────────────────────────────────────────
     with st.expander("ℹ️ About this analysis", expanded=False):
-        total_headers   = sum(cluster_df['size'])
-        total_clusters  = len(cluster_df)
-        avg_size        = cluster_df['size'].mean()
+        total_headers = sum(cluster_df["size"])
+        total_clusters = len(cluster_df)
+        avg_size = cluster_df["size"].mean()
+
+        # Pull k-search range from the DB if available
+        k_df_info = load_k_search_results(run_id)
+        if not k_df_info.empty:
+            k_min_actual = int(k_df_info["k"].min())
+            k_max_actual = int(k_df_info["k"].max())
+            k_range_str = f"k = {k_min_actual} … {k_max_actual}"
+            k_method_str = "chosen automatically by maximising the silhouette score"
+        else:
+            k_range_str = "sweep not yet recorded"
+            k_method_str = "set manually"
 
         st.markdown(f"""
 **What was clustered**
 
-README section headers were extracted from {total_clusters} clusters covering
-**{total_headers:,} headers** (average {avg_size:.0f} per cluster).
-Each header was normalised to lowercase and stripped of leading/trailing
-whitespace before embedding.
+| Parameter | Value |
+|-----------|-------|
+| Total headers clustered | {total_headers:,} |
+| Number of clusters (k) | {total_clusters} |
+| Average cluster size | {avg_size:.0f} headers |
+| Header levels included | H1 – H5 (all Markdown heading levels) |
+| Source | README files from JOSS, Research Software Directory, and Helmholtz repositories |
+
+**Header preprocessing (step 5)**
+
+Before clustering, each raw header was filtered and normalised:
+
+- **Excluded:** headers shorter than 3 characters or longer than 120 characters
+- **Excluded:** version strings (`1.2.0`, `v1.0`), dates (`2024-01-05`), and pure digit strings
+- **Stripped:** leading section numbers ("1. Installation" → "installation")
+- **Normalised:** lowercased and whitespace-trimmed
+- **Why H1 headers are included:** H1 headings sometimes carry meaningful topic labels
+  (e.g. "Getting started", "API reference") alongside project-name uses — including them
+  lets the clustering vocabulary reflect the full heading practice in the corpus.
+  To exclude H1 headers, re-run step 6 with `--min-level 2`.
 
 **Embedding model — `all-MiniLM-L6-v2`**
 
-- Architecture: 6-layer MiniLM Transformer, 384-dimensional sentence vectors
+- Architecture: 6-layer MiniLM Transformer, **384-dimensional** sentence vectors
 - Training: fine-tuned on 1 billion sentence pairs for semantic similarity
-- Chosen because it is fast, lightweight, and well-suited to short-text inputs
-  such as README section headers (typically 2–8 words)
+- Embeddings are **L2-normalised** before clustering so that Euclidean distance
+  approximates cosine similarity — clusters are topic-based, not length-based
+- Chosen for speed and accuracy on short-text inputs (README headers are typically 2–8 words)
 
 **Clustering algorithm — K-Means (k = {total_clusters})**
 
-- Embeddings were L2-normalised so that Euclidean distance approximates
-  cosine similarity, making the clusters topic-based rather than length-based
-- `random_state = 42` was set for reproducibility
-- k = {total_clusters} was selected via a silhouette + inertia sweep
+- **k was {k_method_str}** from a silhouette + inertia sweep over {k_range_str}
   (see the **K-selection analysis** chart below)
+- The silhouette score measures how well each header fits its own cluster vs. the
+  nearest neighbouring cluster (range −1 … +1; higher = better separation)
+- The inertia elbow is shown as a secondary signal
+- `random_state = 42` ensures the run is reproducible
 
-**Cluster names**
+**Cluster naming**
 
-Each cluster was labelled automatically by finding the 5 headers closest to the K-Means centroid,
-then selecting the 3 most frequently occurring words across those headers as the cluster name.
+Each cluster label was generated automatically:
+1. Find the **5 headers** closest to the K-Means centroid (most representative)
+2. Select the **3 most frequent words** across those 5 headers as the cluster name
+
+No manual labelling was applied — names reflect the dominant vocabulary in each cluster.
 """)
 
     # ── K-selection analysis chart ───────────────────────────────────────────
@@ -719,52 +847,66 @@ then selecting the 3 most frequently occurring words across those headers as the
 
     if k_df.empty:
         st.info(
-            "No k-selection data yet — re-run Step 6 with `--search-k` "
-            "(already enabled in the weekly workflow) to generate this chart."
+            "No k-selection data yet — re-run Step 6 "
+            "(the k-search sweep runs by default; use `--no-search-k` to skip it)."
         )
     else:
-        best_row = k_df[k_df['is_best']].iloc[0] if k_df['is_best'].any() else None
-        best_k   = int(best_row['k']) if best_row is not None else None
+        best_row = k_df[k_df["is_best"]].iloc[0] if k_df["is_best"].any() else None
+        best_k = int(best_row["k"]) if best_row is not None else None
 
         # Dual-axis chart: inertia (bar, left) + silhouette (line, right)
         fig = go.Figure()
 
-        fig.add_trace(go.Bar(
-            x=k_df['k'], y=k_df['inertia'],
-            name='Inertia (within-cluster variance)',
-            marker_color='steelblue', opacity=0.6,
-            yaxis='y1',
-        ))
+        fig.add_trace(
+            go.Bar(
+                x=k_df["k"],
+                y=k_df["inertia"],
+                name="Inertia (within-cluster variance)",
+                marker_color="steelblue",
+                opacity=0.6,
+                yaxis="y1",
+            )
+        )
 
-        fig.add_trace(go.Scatter(
-            x=k_df['k'], y=k_df['silhouette'],
-            name='Silhouette score',
-            mode='lines+markers',
-            line=dict(color='darkorange', width=2),
-            marker=dict(size=7),
-            yaxis='y2',
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=k_df["k"],
+                y=k_df["silhouette"],
+                name="Silhouette score",
+                mode="lines+markers",
+                line={"color": "darkorange", "width": 2},
+                marker={"size": 7},
+                yaxis="y2",
+            )
+        )
 
         if best_k is not None:
             fig.add_vline(
-                x=best_k, line_dash='dash', line_color='green',
+                x=best_k,
+                line_dash="dash",
+                line_color="green",
                 annotation_text=f"Best k={best_k}",
-                annotation_position='top right',
+                annotation_position="top right",
             )
 
         fig.update_layout(
-            title='K-Means k-selection: inertia (elbow) vs silhouette score',
-            xaxis=dict(title='Number of clusters (k)', dtick=k_df['k'].diff().median()),
-            yaxis=dict(title='Inertia', side='left', showgrid=False),
-            yaxis2=dict(title='Silhouette score', side='right', overlaying='y',
-                        showgrid=True, range=[0, max(0.5, k_df['silhouette'].max() * 1.1)]),
-            legend=dict(orientation='h', yanchor='bottom', y=1.02),
+            title="K-Means k-selection: inertia (elbow) vs silhouette score",
+            xaxis={"title": "Number of clusters (k)", "dtick": k_df["k"].diff().median()},
+            yaxis={"title": "Inertia", "side": "left", "showgrid": False},
+            yaxis2={
+                "title": "Silhouette score",
+                "side": "right",
+                "overlaying": "y",
+                "showgrid": True,
+                "range": [0, max(0.5, k_df["silhouette"].max() * 1.1)],
+            },
+            legend={"orientation": "h", "yanchor": "bottom", "y": 1.02},
             height=400,
         )
         st.plotly_chart(fig, use_container_width=True)
 
         if best_k is not None:
-            best_sil = float(k_df[k_df['is_best']]['silhouette'].iloc[0])
+            best_sil = float(k_df[k_df["is_best"]]["silhouette"].iloc[0])
             st.caption(
                 f"k = **{best_k}** was selected as the value with the highest "
                 f"silhouette score ({best_sil:.4f}) across the sweep. "
@@ -778,21 +920,19 @@ then selecting the 3 most frequently occurring words across those headers as the
 
     with col1:
         search_term = st.text_input("🔎 Search clusters by name", "")
-    
+
     with col2:
         min_size = st.number_input("Min cluster size", min_value=0, value=0)
-    
+
     # Filter
     if search_term:
-        cluster_df = cluster_df[
-            cluster_df['name'].str.contains(search_term, case=False, na=False)
-        ]
-    
+        cluster_df = cluster_df[cluster_df["name"].str.contains(search_term, case=False, na=False)]
+
     if min_size > 0:
-        cluster_df = cluster_df[cluster_df['size'] >= min_size]
-    
+        cluster_df = cluster_df[cluster_df["size"] >= min_size]
+
     st.markdown(f"**Showing {len(cluster_df)} clusters**")
-    
+
     # Display clusters
     for _, row in cluster_df.iterrows():
         with st.expander(f"**{row['name']}** ({row['size']} headers)"):
@@ -800,14 +940,18 @@ then selecting the 3 most frequently occurring words across those headers as the
             st.markdown(f"**Size:** {row['size']} headers")
 
             st.markdown("**20 most representative headers (closest to cluster centre):**")
-            members = load_cluster_members(int(row['id']), limit=20)
+            members = load_cluster_members(int(row["id"]), limit=20)
             if members:
                 for i, (header_text, dist) in enumerate(members, 1):
-                    dist_str = f"  <span style='color:grey;font-size:0.8em'>dist={dist:.3f}</span>" if dist is not None else ""
+                    dist_str = (
+                        f"  <span style='color:grey;font-size:0.8em'>dist={dist:.3f}</span>"
+                        if dist is not None
+                        else ""
+                    )
                     st.markdown(f"{i}. `{header_text}`{dist_str}", unsafe_allow_html=True)
             else:
                 # fallback: use stored representative headers if live query returns nothing
-                for i, header in enumerate(row['representative_headers'][:20], 1):
+                for i, header in enumerate(row["representative_headers"][:20], 1):
                     st.markdown(f"{i}. `{header}`")
 
 
@@ -815,69 +959,73 @@ def show_visualization():
     """Visualization page"""
 
     st.info("⚠️ Loading and projecting embeddings may take a minute...")
-    
+
     # Options
     col1, col2 = st.columns(2)
-    
+
     with col1:
         max_samples = st.slider("Max samples to visualize", 1000, 10000, 5000, 500)
-    
+
     with col2:
         dimensions = st.radio("Projection", ["2D", "3D"])
-    
+
     n_components = 2 if dimensions == "2D" else 3
-    
+
     if st.button("Generate Visualization", type="primary"):
         with st.spinner("Loading embeddings..."):
             header_ids, embeddings, assignments = load_embeddings_for_viz(max_samples)
-        
+
         with st.spinner(f"Computing {dimensions} UMAP projection..."):
             projection = compute_umap(embeddings, n_components)
-        
+
         # Create dataframe
         if n_components == 2:
-            df = pd.DataFrame({
-                'header_id': header_ids,
-                'x': projection[:, 0],
-                'y': projection[:, 1],
-                'cluster': [assignments.get(hid, "Unassigned") for hid in header_ids]
-            })
-            
+            df = pd.DataFrame(
+                {
+                    "header_id": header_ids,
+                    "x": projection[:, 0],
+                    "y": projection[:, 1],
+                    "cluster": [assignments.get(hid, "Unassigned") for hid in header_ids],
+                }
+            )
+
             fig = px.scatter(
                 df,
-                x='x',
-                y='y',
-                color='cluster',
+                x="x",
+                y="y",
+                color="cluster",
                 title=f"{dimensions} UMAP Projection of Header Embeddings",
-                labels={'x': 'UMAP 1', 'y': 'UMAP 2'},
-                hover_data=['header_id']
+                labels={"x": "UMAP 1", "y": "UMAP 2"},
+                hover_data=["header_id"],
             )
-            fig.update_traces(marker=dict(size=5, opacity=0.7))
-            
+            fig.update_traces(marker={"size": 5, "opacity": 0.7})
+
         else:  # 3D
-            df = pd.DataFrame({
-                'header_id': header_ids,
-                'x': projection[:, 0],
-                'y': projection[:, 1],
-                'z': projection[:, 2],
-                'cluster': [assignments.get(hid, "Unassigned") for hid in header_ids]
-            })
-            
+            df = pd.DataFrame(
+                {
+                    "header_id": header_ids,
+                    "x": projection[:, 0],
+                    "y": projection[:, 1],
+                    "z": projection[:, 2],
+                    "cluster": [assignments.get(hid, "Unassigned") for hid in header_ids],
+                }
+            )
+
             fig = px.scatter_3d(
                 df,
-                x='x',
-                y='y',
-                z='z',
-                color='cluster',
+                x="x",
+                y="y",
+                z="z",
+                color="cluster",
                 title=f"{dimensions} UMAP Projection of Header Embeddings",
-                labels={'x': 'UMAP 1', 'y': 'UMAP 2', 'z': 'UMAP 3'},
-                hover_data=['header_id']
+                labels={"x": "UMAP 1", "y": "UMAP 2", "z": "UMAP 3"},
+                hover_data=["header_id"],
             )
-            fig.update_traces(marker=dict(size=3, opacity=0.6))
-        
+            fig.update_traces(marker={"size": 3, "opacity": 0.6})
+
         fig.update_layout(height=700)
         st.plotly_chart(fig, use_container_width=True)
-        
+
         st.success(f"✅ Visualized {len(df):,} headers across {df['cluster'].nunique()} clusters")
 
 
@@ -890,9 +1038,12 @@ def show_search():
         # Collect all data within the session context, then render UI outside
         display_results = []
         with get_session_context() as session:
-            results = session.query(ReadmeHeader).filter(
-                ReadmeHeader.normalized_text.contains(search_query.lower())
-            ).limit(100).all()
+            results = (
+                session.query(ReadmeHeader)
+                .filter(ReadmeHeader.normalized_text.contains(search_query.lower()))
+                .limit(100)
+                .all()
+            )
 
             result_ids = [r.id for r in results]
             cluster_map: dict[int, str] = {}
@@ -918,35 +1069,39 @@ def show_search():
 
             # Convert to plain dicts before session closes
             for result in results:
-                display_results.append({
-                    "id":            result.id,
-                    "header_text":   result.header_text,
-                    "repository_id": result.repository_id,
-                    "repo_url":      url_map.get(result.repository_id, ""),
-                    "level":         result.level,
-                    "position":      result.position,
-                    "cluster":       cluster_map.get(result.id, "Unassigned"),
-                })
+                display_results.append(
+                    {
+                        "id": result.id,
+                        "header_text": result.header_text,
+                        "repository_id": result.repository_id,
+                        "repo_url": url_map.get(result.repository_id, ""),
+                        "level": result.level,
+                        "position": result.position,
+                        "cluster": cluster_map.get(result.id, "Unassigned"),
+                    }
+                )
 
         st.markdown(f"**Found {len(display_results)} results** (showing top 100)")
         for r in display_results:
             with st.expander(f"`{r['header_text']}` → **{r['cluster']}**"):
                 st.markdown(f"**Header ID:** {r['id']}")
-                if r['repo_url']:
+                if r["repo_url"]:
                     st.markdown(f"**Repository:** [{r['repo_url']}]({r['repo_url']})")
                 else:
                     st.markdown(f"**Repository ID:** {r['repository_id']}")
                 st.markdown(f"**Level:** H{r['level']}")
                 st.markdown(f"**Position:** {r['position']}")
                 st.markdown(f"**Cluster:** {r['cluster']}")
-                if r['cluster'] == "Unassigned" and r['level'] == 1:
-                    st.caption("ℹ️ H1 headers are excluded from clustering (typically project names).")
+                if r["cluster"] == "Unassigned" and r["level"] == 1:
+                    st.caption(
+                        "ℹ️ H1 headers are excluded from clustering (typically project names)."
+                    )
 
 
 def show_export(run_id):
     """Export page"""
 
-    ts = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
+    ts = pd.Timestamp.now().strftime("%Y%m%d_%H%M")
     cluster_df = load_cluster_data(run_id)
 
     if cluster_df.empty:
@@ -954,77 +1109,77 @@ def show_export(run_id):
         return
 
     st.markdown("### Download Options")
-    
+
     col1, col2 = st.columns(2)
-    
+
     with col1:
         st.markdown("#### Cluster Summary (CSV)")
-        _dl = cluster_df[['cluster_id', 'name', 'size', 'sample']].copy()
+        _dl = cluster_df[["cluster_id", "name", "size", "sample"]].copy()
         if run_id:
-            _dl['run_id'] = run_id
+            _dl["run_id"] = run_id
         st.download_button(
             label="Download CSV",
             data=_dl.to_csv(index=False),
             file_name=f"cluster_summary_{ts}.csv",
-            mime="text/csv"
+            mime="text/csv",
         )
 
     with col2:
         st.markdown("#### Full Report (JSON)")
-        json_data = cluster_df.to_json(orient='records', indent=2)
+        json_data = cluster_df.to_json(orient="records", indent=2)
         st.download_button(
             label="Download JSON",
             data=json_data,
             file_name=f"cluster_report_{ts}.json",
-            mime="application/json"
+            mime="application/json",
         )
-    
+
     st.markdown("---")
-    
+
     st.markdown("### Research Summary")
-    
+
     stats = load_overview_stats()
-    
+
     summary = f"""
 ## Research Software Metadata Analyser
 
-**Date:** {pd.Timestamp.now().strftime('%Y-%m-%d')}
+**Date:** {pd.Timestamp.now().strftime("%Y-%m-%d")}
 **Run ID:** {run_id}
 
 ### Dataset
-- **Repositories Analyzed:** {stats['total_repos']:,}
-- **Headers Extracted:** {stats['total_headers']:,}
-- **Average Headers per Repository:** {(stats['total_headers']/stats['total_repos'] if stats['total_repos'] > 0 else 0.0):.1f}
+- **Repositories Analyzed:** {stats["total_repos"]:,}
+- **Headers Extracted:** {stats["total_headers"]:,}
+- **Average Headers per Repository:** {(stats["total_headers"] / stats["total_repos"] if stats["total_repos"] > 0 else 0.0):.1f}
 
 ### Clustering Results
-- **Number of Clusters:** {stats['total_clusters']}
-- **Headers Clustered:** {stats['total_assignments']:,} ({(stats['total_assignments']/stats['total_headers']*100 if stats['total_headers'] > 0 else 0.0):.1f}%)
-- **Average Cluster Size:** {cluster_df['size'].mean():.0f}
-- **Median Cluster Size:** {cluster_df['size'].median():.0f}
+- **Number of Clusters:** {stats["total_clusters"]}
+- **Headers Clustered:** {stats["total_assignments"]:,} ({(stats["total_assignments"] / stats["total_headers"] * 100 if stats["total_headers"] > 0 else 0.0):.1f}%)
+- **Average Cluster Size:** {cluster_df["size"].mean():.0f}
+- **Median Cluster Size:** {cluster_df["size"].median():.0f}
 
 ### Top 10 Clusters
-{cluster_df[['name', 'size']].head(10).to_markdown(index=False)}
+{cluster_df[["name", "size"]].head(10).to_markdown(index=False)}
 
 ### Methodology
 - **Embedding Model:** all-MiniLM-L6-v2 (384 dimensions)
 - **Clustering Algorithm:** K-Means (k=30)
 - **Distance Metric:** Euclidean distance on normalized embeddings
 """
-    
+
     st.markdown(summary)
-    
+
     st.download_button(
         label="Download Summary (Markdown)",
         data=summary,
         file_name=f"research_summary_{ts}.md",
-        mime="text/markdown"
+        mime="text/markdown",
     )
 
 
 def show_license_analysis():
     """License analysis page"""
 
-    ts = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
+    ts = pd.Timestamp.now().strftime("%Y%m%d_%H%M")
     license_df = load_license_data()
 
     if license_df.empty:
@@ -1032,7 +1187,7 @@ def show_license_analysis():
         return
 
     total_repos = len(license_df)
-    with_license = len(license_df[license_df['license'] != 'No License'])
+    with_license = len(license_df[license_df["license"] != "No License"])
     without_license = total_repos - with_license
 
     st.subheader("📊 Overview")
@@ -1040,29 +1195,40 @@ def show_license_analysis():
     with col1:
         st.metric("Total Repositories", f"{total_repos:,}")
     with col2:
-        st.metric("With License", f"{with_license:,}",
-                  delta=f"{with_license/total_repos*100:.1f}%" if total_repos else "0%")
+        st.metric(
+            "With License",
+            f"{with_license:,}",
+            delta=f"{with_license / total_repos * 100:.1f}%" if total_repos else "0%",
+        )
     with col3:
-        st.metric("Without License", f"{without_license:,}",
-                  delta=f"-{without_license/total_repos*100:.1f}%" if total_repos else "0%",
-                  delta_color="inverse")
+        st.metric(
+            "Without License",
+            f"{without_license:,}",
+            delta=f"-{without_license / total_repos * 100:.1f}%" if total_repos else "0%",
+            delta_color="inverse",
+        )
     with col4:
-        unique_licenses = license_df[license_df['license'] != 'No License']['license'].nunique()
+        unique_licenses = license_df[license_df["license"] != "No License"]["license"].nunique()
         st.metric("Unique Licenses", unique_licenses)
 
     # ── Drilldown: repos without a license ────────────────────────────────
     if without_license > 0:
         with st.expander(f"View {without_license} repositories without a license"):
-            no_lic_df = license_df[license_df['license'] == 'No License'][
-                ['name', 'url', 'platform', 'source']
-            ].copy().reset_index(drop=True)
+            no_lic_df = (
+                license_df[license_df["license"] == "No License"][
+                    ["name", "url", "platform", "source"]
+                ]
+                .copy()
+                .reset_index(drop=True)
+            )
 
             # Platform filter
-            platforms = sorted(no_lic_df['platform'].unique().tolist())
+            platforms = sorted(no_lic_df["platform"].unique().tolist())
             if len(platforms) > 1:
-                sel = st.multiselect("Filter by platform", platforms, default=platforms,
-                                     key="no_lic_platform_filter")
-                no_lic_df = no_lic_df[no_lic_df['platform'].isin(sel)]
+                sel = st.multiselect(
+                    "Filter by platform", platforms, default=platforms, key="no_lic_platform_filter"
+                )
+                no_lic_df = no_lic_df[no_lic_df["platform"].isin(sel)]
 
             st.dataframe(
                 no_lic_df,
@@ -1077,29 +1243,36 @@ def show_license_analysis():
             )
 
             st.download_button(
-                "Download list (CSV)", data=no_lic_df.to_csv(index=False),
-                file_name=f"repos_without_license_{ts}.csv", mime="text/csv",
+                "Download list (CSV)",
+                data=no_lic_df.to_csv(index=False),
+                file_name=f"repos_without_license_{ts}.csv",
+                mime="text/csv",
                 key="no_lic_csv_dl",
             )
 
     st.markdown("---")
     st.subheader("🏆 Top 10 Licenses")
 
-    license_counts = license_df['license'].value_counts().head(10)
+    license_counts = license_df["license"].value_counts().head(10)
     col1, col2 = st.columns(2)
     with col1:
         fig = px.bar(
-            x=license_counts.values, y=license_counts.index, orientation='h',
+            x=license_counts.values,
+            y=license_counts.index,
+            orientation="h",
             title="Most Common Licenses",
-            labels={'x': 'Number of Repositories', 'y': 'License'},
-            color=license_counts.values, color_continuous_scale='Blues'
+            labels={"x": "Number of Repositories", "y": "License"},
+            color=license_counts.values,
+            color_continuous_scale="Blues",
         )
-        fig.update_layout(height=400, yaxis={'categoryorder': 'total ascending'})
+        fig.update_layout(height=400, yaxis={"categoryorder": "total ascending"})
         st.plotly_chart(fig, use_container_width=True)
     with col2:
         fig = px.pie(
-            values=license_counts.values, names=license_counts.index,
-            title="License Distribution", hole=0.3
+            values=license_counts.values,
+            names=license_counts.index,
+            title="License Distribution",
+            hole=0.3,
         )
         fig.update_layout(height=400)
         st.plotly_chart(fig, use_container_width=True)
@@ -1107,16 +1280,18 @@ def show_license_analysis():
     st.markdown("---")
     st.subheader("📂 License Categories")
 
-    license_df['category'] = license_df['license'].apply(categorize_license)
-    category_counts = license_df['category'].value_counts()
+    license_df["category"] = license_df["license"].apply(categorize_license)
+    category_counts = license_df["category"].value_counts()
 
     col1, col2 = st.columns(2)
     with col1:
         fig = px.bar(
-            x=category_counts.index, y=category_counts.values,
+            x=category_counts.index,
+            y=category_counts.values,
             title="Licenses by Category",
-            labels={'x': 'Category', 'y': 'Count'},
-            color=category_counts.values, color_continuous_scale='Viridis'
+            labels={"x": "Category", "y": "Count"},
+            color=category_counts.values,
+            color_continuous_scale="Viridis",
         )
         fig.update_layout(height=400)
         st.plotly_chart(fig, use_container_width=True)
@@ -1128,15 +1303,17 @@ def show_license_analysis():
 
     st.markdown("---")
     st.download_button(
-        label="Download License Report (CSV)", data=license_df.to_csv(index=False),
-        file_name=f"license_analysis_{ts}.csv", mime="text/csv"
+        label="Download License Report (CSV)",
+        data=license_df.to_csv(index=False),
+        file_name=f"license_analysis_{ts}.csv",
+        mime="text/csv",
     )
 
 
 def show_repository_browser():
     """Repository browser page"""
 
-    ts = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
+    ts = pd.Timestamp.now().strftime("%Y%m%d_%H%M")
     repo_df = load_repository_details()
 
     if repo_df.empty:
@@ -1149,7 +1326,7 @@ def show_repository_browser():
     with col2:
         st.metric("With License", f"{len(repo_df[repo_df['license'] != 'No License']):,}")
     with col3:
-        st.metric("Languages", repo_df['language'].nunique())
+        st.metric("Languages", repo_df["language"].nunique())
     with col4:
         st.metric("Total Stars", f"{repo_df['stars'].sum():,}")
 
@@ -1159,25 +1336,27 @@ def show_repository_browser():
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         selected_license = st.selectbox(
-            "License", ['All'] + sorted(repo_df['license'].unique().tolist()))
+            "License", ["All"] + sorted(repo_df["license"].unique().tolist())
+        )
     with col2:
         selected_language = st.selectbox(
-            "Language", ['All'] + sorted(repo_df['language'].unique().tolist()))
+            "Language", ["All"] + sorted(repo_df["language"].unique().tolist())
+        )
     with col3:
-        source_options = ['All'] + sorted(repo_df['source'].unique().tolist())
+        source_options = ["All"] + sorted(repo_df["source"].unique().tolist())
         selected_source = st.selectbox("Source", source_options)
     with col4:
         search_term = st.text_input("Search by name", "")
 
     filtered = repo_df.copy()
-    if selected_license != 'All':
-        filtered = filtered[filtered['license'] == selected_license]
-    if selected_language != 'All':
-        filtered = filtered[filtered['language'] == selected_language]
-    if selected_source != 'All':
-        filtered = filtered[filtered['source'] == selected_source]
+    if selected_license != "All":
+        filtered = filtered[filtered["license"] == selected_license]
+    if selected_language != "All":
+        filtered = filtered[filtered["language"] == selected_language]
+    if selected_source != "All":
+        filtered = filtered[filtered["source"] == selected_source]
     if search_term:
-        filtered = filtered[filtered['name'].str.contains(search_term, case=False, na=False)]
+        filtered = filtered[filtered["name"].str.contains(search_term, case=False, na=False)]
 
     col1, col2 = st.columns([3, 1])
     with col1:
@@ -1186,25 +1365,27 @@ def show_repository_browser():
         sort_by = st.selectbox("Sort by", ["Name", "Stars", "License", "Source"])
 
     if sort_by == "Stars":
-        filtered = filtered.sort_values('stars', ascending=False)
+        filtered = filtered.sort_values("stars", ascending=False)
     elif sort_by == "License":
-        filtered = filtered.sort_values('license')
+        filtered = filtered.sort_values("license")
     elif sort_by == "Source":
-        filtered = filtered.sort_values('source')
+        filtered = filtered.sort_values("source")
     else:
-        filtered = filtered.sort_values('name')
+        filtered = filtered.sort_values("name")
 
     st.dataframe(
-        filtered[['name', 'license', 'language', 'stars', 'source', 'url']].head(500),
+        filtered[["name", "license", "language", "stars", "source", "url"]].head(500),
         column_config={
-            "name":     st.column_config.TextColumn("Repository", width="medium"),
-            "license":  st.column_config.TextColumn("License",    width="medium"),
-            "language": st.column_config.TextColumn("Language",   width="small"),
-            "stars":    st.column_config.NumberColumn("⭐ Stars",  width="small"),
-            "source":   st.column_config.TextColumn("Source",     width="small"),
-            "url":      st.column_config.LinkColumn("Link",        width="medium"),
+            "name": st.column_config.TextColumn("Repository", width="medium"),
+            "license": st.column_config.TextColumn("License", width="medium"),
+            "language": st.column_config.TextColumn("Language", width="small"),
+            "stars": st.column_config.NumberColumn("⭐ Stars", width="small"),
+            "source": st.column_config.TextColumn("Source", width="small"),
+            "url": st.column_config.LinkColumn("Link", width="medium"),
         },
-        hide_index=True, use_container_width=True, height=600
+        hide_index=True,
+        use_container_width=True,
+        height=600,
     )
     if len(filtered) > 500:
         st.info("Showing first 500 results. Use filters to narrow down.")
@@ -1213,20 +1394,22 @@ def show_repository_browser():
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("**Repository Sources**")
-        filtered['domain'] = filtered['url'].apply(
-            lambda x: urlparse(x).netloc if pd.notna(x) else 'Unknown')
-        for domain, count in filtered['domain'].value_counts().head(5).items():
+        filtered["domain"] = filtered["url"].apply(
+            lambda x: urlparse(x).netloc if pd.notna(x) else "Unknown"
+        )
+        for domain, count in filtered["domain"].value_counts().head(5).items():
             st.write(f"- **{domain}**: {count} repos")
     with col2:
         st.markdown("**Top 5 Licenses**")
-        for lic, count in filtered['license'].value_counts().head(5).items():
+        for lic, count in filtered["license"].value_counts().head(5).items():
             st.write(f"- **{lic}**: {count} repos")
 
     st.markdown("---")
     st.download_button(
         label=f"Download {len(filtered)} Repositories (CSV)",
-        data=filtered.drop(columns=['domain'], errors='ignore').to_csv(index=False),
-        file_name=f"repository_list_{ts}.csv", mime="text/csv"
+        data=filtered.drop(columns=["domain"], errors="ignore").to_csv(index=False),
+        file_name=f"repository_list_{ts}.csv",
+        mime="text/csv",
     )
 
     # ── Excluded Repositories ─────────────────────────────────────────────
@@ -1239,41 +1422,60 @@ def show_repository_browser():
             excl_col1, excl_col2, excl_col3 = st.columns(3)
             with excl_col1:
                 excl_source = st.selectbox(
-                    "Filter by source", ['All'] + sorted(excl_df['source'].unique().tolist()),
-                    key="excl_source")
+                    "Filter by source",
+                    ["All"] + sorted(excl_df["source"].unique().tolist()),
+                    key="excl_source",
+                )
             with excl_col2:
                 excl_stage = st.selectbox(
-                    "Filter by stage", ['All'] + sorted(excl_df['exclusion_stage'].unique().tolist()),
-                    key="excl_stage")
+                    "Filter by stage",
+                    ["All"] + sorted(excl_df["exclusion_stage"].unique().tolist()),
+                    key="excl_stage",
+                )
             with excl_col3:
                 excl_search = st.text_input("Search URL", "", key="excl_search")
 
             excl_filtered = excl_df.copy()
-            if excl_source != 'All':
-                excl_filtered = excl_filtered[excl_filtered['source'] == excl_source]
-            if excl_stage != 'All':
-                excl_filtered = excl_filtered[excl_filtered['exclusion_stage'] == excl_stage]
+            if excl_source != "All":
+                excl_filtered = excl_filtered[excl_filtered["source"] == excl_source]
+            if excl_stage != "All":
+                excl_filtered = excl_filtered[excl_filtered["exclusion_stage"] == excl_stage]
             if excl_search:
                 excl_filtered = excl_filtered[
-                    excl_filtered['url'].str.contains(excl_search, case=False, na=False)]
+                    excl_filtered["url"].str.contains(excl_search, case=False, na=False)
+                ]
 
-            st.markdown(f"**Showing {len(excl_filtered):,} of {len(excl_df):,} excluded repositories**")
+            st.markdown(
+                f"**Showing {len(excl_filtered):,} of {len(excl_df):,} excluded repositories**"
+            )
             st.dataframe(
-                excl_filtered[['url', 'exclusion_reason', 'exclusion_stage', 'source', 'retryable', 'excluded_at']].head(500),
+                excl_filtered[
+                    [
+                        "url",
+                        "exclusion_reason",
+                        "exclusion_stage",
+                        "source",
+                        "retryable",
+                        "excluded_at",
+                    ]
+                ].head(500),
                 column_config={
-                    "url":               st.column_config.LinkColumn("URL",             width="large"),
-                    "exclusion_reason":  st.column_config.TextColumn("Reason",          width="large"),
-                    "exclusion_stage":   st.column_config.TextColumn("Stage",           width="small"),
-                    "source":            st.column_config.TextColumn("Source",          width="small"),
-                    "retryable":         st.column_config.CheckboxColumn("Retryable",   width="small"),
-                    "excluded_at":       st.column_config.DatetimeColumn("Excluded At", width="medium"),
+                    "url": st.column_config.LinkColumn("URL", width="large"),
+                    "exclusion_reason": st.column_config.TextColumn("Reason", width="large"),
+                    "exclusion_stage": st.column_config.TextColumn("Stage", width="small"),
+                    "source": st.column_config.TextColumn("Source", width="small"),
+                    "retryable": st.column_config.CheckboxColumn("Retryable", width="small"),
+                    "excluded_at": st.column_config.DatetimeColumn("Excluded At", width="medium"),
                 },
-                hide_index=True, use_container_width=True, height=400
+                hide_index=True,
+                use_container_width=True,
+                height=400,
             )
             st.download_button(
                 label=f"Download {len(excl_filtered)} Excluded Repos (CSV)",
                 data=excl_filtered.to_csv(index=False),
-                file_name=f"excluded_repositories_{ts}.csv", mime="text/csv"
+                file_name=f"excluded_repositories_{ts}.csv",
+                mime="text/csv",
             )
 
     # ── Unsupported-Platform Repositories ─────────────────────────────────
@@ -1307,14 +1509,18 @@ def show_repository_browser():
 
             # ── Host frequency bar chart ─────────────────────────────────
             host_counts = (
-                unsup_df.groupby("host")["seen"].sum()
+                unsup_df.groupby("host")["seen"]
+                .sum()
                 .sort_values(ascending=False)
                 .head(20)
                 .reset_index()
                 .rename(columns={"seen": "occurrences"})
             )
             fig = px.bar(
-                host_counts, x="occurrences", y="host", orientation="h",
+                host_counts,
+                x="occurrences",
+                y="host",
+                orientation="h",
                 title="Top 20 Unsupported Hosts (by total occurrences)",
                 labels={"host": "Host", "occurrences": "Occurrences"},
                 height=max(300, len(host_counts) * 26),
@@ -1345,25 +1551,28 @@ def show_repository_browser():
             if u_source != "All":
                 unsup_filtered = unsup_filtered[unsup_filtered["source"] == u_source]
             if u_search:
-                mask = (
-                    unsup_filtered["url"].str.contains(u_search, case=False, na=False)
-                    | unsup_filtered["host"].str.contains(u_search, case=False, na=False)
-                )
+                mask = unsup_filtered["url"].str.contains(
+                    u_search, case=False, na=False
+                ) | unsup_filtered["host"].str.contains(u_search, case=False, na=False)
                 unsup_filtered = unsup_filtered[mask]
 
             st.markdown(f"**Showing {len(unsup_filtered):,} of {len(unsup_df):,} records**")
             st.dataframe(
-                unsup_filtered[["url", "source", "host", "platform", "seen", "first_seen", "last_seen"]].head(500),
+                unsup_filtered[
+                    ["url", "source", "host", "platform", "seen", "first_seen", "last_seen"]
+                ].head(500),
                 column_config={
-                    "url":        st.column_config.LinkColumn("URL",          width="large"),
-                    "source":     st.column_config.TextColumn("Source",       width="small"),
-                    "host":       st.column_config.TextColumn("Host",         width="medium"),
-                    "platform":   st.column_config.TextColumn("Platform",     width="small"),
-                    "seen":       st.column_config.NumberColumn("# Seen",     width="small"),
+                    "url": st.column_config.LinkColumn("URL", width="large"),
+                    "source": st.column_config.TextColumn("Source", width="small"),
+                    "host": st.column_config.TextColumn("Host", width="medium"),
+                    "platform": st.column_config.TextColumn("Platform", width="small"),
+                    "seen": st.column_config.NumberColumn("# Seen", width="small"),
                     "first_seen": st.column_config.DatetimeColumn("First Seen", width="medium"),
-                    "last_seen":  st.column_config.DatetimeColumn("Last Seen",  width="medium"),
+                    "last_seen": st.column_config.DatetimeColumn("Last Seen", width="medium"),
                 },
-                hide_index=True, use_container_width=True, height=400,
+                hide_index=True,
+                use_container_width=True,
+                height=400,
             )
             if len(unsup_filtered) > 500:
                 st.info("Showing first 500 results. Use filters to narrow down.")
@@ -1379,17 +1588,17 @@ def show_repository_browser():
 def show_data_quality():
     """Data quality and processing transparency report"""
 
-    ts = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
+    ts = pd.Timestamp.now().strftime("%Y%m%d_%H%M")
     with get_session_context() as session:
-        total_repos      = session.query(Repository).count()
-        total_readmes    = session.query(ReadmeHeader.repository_id).distinct().count()
-        total_headers    = session.query(ReadmeHeader).count()
+        total_repos = session.query(Repository).count()
+        total_readmes = session.query(ReadmeHeader.repository_id).distinct().count()
+        total_headers = session.query(ReadmeHeader).count()
         total_embeddings = session.query(HeaderEmbedding).count()
-        total_clustered  = session.query(HeaderClusterAssignment).count()
-        total_clusters   = session.query(Cluster).count()
-        total_excluded   = session.execute(
-            text("SELECT COUNT(*) FROM excluded_repositories")
-        ).scalar() or 0
+        total_clustered = session.query(HeaderClusterAssignment).count()
+        total_clusters = session.query(Cluster).count()
+        total_excluded = (
+            session.execute(text("SELECT COUNT(*) FROM excluded_repositories")).scalar() or 0
+        )
 
     if total_repos == 0:
         st.info("No data yet — run the pipeline first.")
@@ -1398,63 +1607,96 @@ def show_data_quality():
     repos_without_readme = total_repos - total_readmes
     avg_headers = total_headers / total_readmes if total_readmes > 0 else 0
     ORIGINAL_SCRAPED = total_repos + total_excluded
-    invalid_removed  = total_excluded
-    retention        = total_repos / ORIGINAL_SCRAPED * 100 if ORIGINAL_SCRAPED else 100.0
-    readme_coverage  = total_readmes / total_repos * 100 if total_repos else 0
+    invalid_removed = total_excluded
+    retention = total_repos / ORIGINAL_SCRAPED * 100 if ORIGINAL_SCRAPED else 100.0
+    readme_coverage = total_readmes / total_repos * 100 if total_repos else 0
     cluster_coverage = total_clustered / total_headers * 100 if total_headers else 0
 
     st.subheader("🔄 Processing Pipeline")
 
-    pipeline_df = pd.DataFrame({
-        'Stage': [
-            '1. Initial Scraping', '2. Valid Repositories', '3. README Extracted',
-            '4. Headers Extracted', '5. Embeddings Generated', '6. Clustered'
-        ],
-        'Count': [ORIGINAL_SCRAPED, total_repos, total_readmes,
-                  total_headers, total_embeddings, total_clustered],
-        'Lost': [0, invalid_removed, repos_without_readme,
-                 0, total_headers - total_embeddings, total_embeddings - total_clustered],
-        'Retention %': [
-            100.0,
-            round(total_repos / ORIGINAL_SCRAPED * 100, 1),
-            round(total_readmes / total_repos * 100, 1) if total_repos else 0,
-            100.0,
-            round(total_embeddings / total_headers * 100, 1) if total_headers else 0,
-            round(total_clustered / total_embeddings * 100, 1) if total_embeddings else 0,
-        ],
-    })
+    pipeline_df = pd.DataFrame(
+        {
+            "Stage": [
+                "1. Initial Scraping",
+                "2. Valid Repositories",
+                "3. README Extracted",
+                "4. Headers Extracted",
+                "5. Embeddings Generated",
+                "6. Clustered",
+            ],
+            "Count": [
+                ORIGINAL_SCRAPED,
+                total_repos,
+                total_readmes,
+                total_headers,
+                total_embeddings,
+                total_clustered,
+            ],
+            "Lost": [
+                0,
+                invalid_removed,
+                repos_without_readme,
+                0,
+                total_headers - total_embeddings,
+                total_embeddings - total_clustered,
+            ],
+            "Retention %": [
+                100.0,
+                round(total_repos / ORIGINAL_SCRAPED * 100, 1),
+                round(total_readmes / total_repos * 100, 1) if total_repos else 0,
+                100.0,
+                round(total_embeddings / total_headers * 100, 1) if total_headers else 0,
+                round(total_clustered / total_embeddings * 100, 1) if total_embeddings else 0,
+            ],
+        }
+    )
 
     st.dataframe(
         pipeline_df,
         column_config={
-            "Stage":       st.column_config.TextColumn("Processing Stage", width="large"),
-            "Count":       st.column_config.NumberColumn("Count",          format="%d"),
-            "Lost":        st.column_config.NumberColumn("Lost",           format="%d"),
-            "Retention %": st.column_config.NumberColumn("Retention",      format="%.1f%%"),
+            "Stage": st.column_config.TextColumn("Processing Stage", width="large"),
+            "Count": st.column_config.NumberColumn("Count", format="%d"),
+            "Lost": st.column_config.NumberColumn("Lost", format="%d"),
+            "Retention %": st.column_config.NumberColumn("Retention", format="%.1f%%"),
         },
-        hide_index=True, use_container_width=True
+        hide_index=True,
+        use_container_width=True,
     )
 
     st.markdown("---")
     st.subheader("📊 Data Flow")
 
-    fig = go.Figure(data=[go.Sankey(
-        node=dict(
-            pad=15, thickness=20,
-            line=dict(color="black", width=0.5),
-            label=[
-                f"Initial ({ORIGINAL_SCRAPED:,})", f"Valid ({total_repos:,})",
-                f"With README ({total_readmes:,})", f"Headers ({total_headers:,})",
-                f"Embeddings ({total_embeddings:,})", f"Clustered ({total_clustered:,})"
-            ],
-            color=["#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b"]
-        ),
-        link=dict(
-            source=[0, 1, 2, 3, 4],
-            target=[1, 2, 3, 4, 5],
-            value=[total_repos, total_readmes, total_headers, total_embeddings, total_clustered]
-        )
-    )])
+    fig = go.Figure(
+        data=[
+            go.Sankey(
+                node={
+                    "pad": 15,
+                    "thickness": 20,
+                    "line": {"color": "black", "width": 0.5},
+                    "label": [
+                        f"Initial ({ORIGINAL_SCRAPED:,})",
+                        f"Valid ({total_repos:,})",
+                        f"With README ({total_readmes:,})",
+                        f"Headers ({total_headers:,})",
+                        f"Embeddings ({total_embeddings:,})",
+                        f"Clustered ({total_clustered:,})",
+                    ],
+                    "color": ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"],
+                },
+                link={
+                    "source": [0, 1, 2, 3, 4],
+                    "target": [1, 2, 3, 4, 5],
+                    "value": [
+                        total_repos,
+                        total_readmes,
+                        total_headers,
+                        total_embeddings,
+                        total_clustered,
+                    ],
+                },
+            )
+        ]
+    )
     fig.update_layout(title="Repository Processing Flow", height=400, font_size=12)
     st.plotly_chart(fig, use_container_width=True)
 
@@ -1463,11 +1705,11 @@ def show_data_quality():
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Retention Rate",    f"{retention:.1f}%")
+        st.metric("Retention Rate", f"{retention:.1f}%")
     with col2:
-        st.metric("README Coverage",   f"{readme_coverage:.1f}%")
+        st.metric("README Coverage", f"{readme_coverage:.1f}%")
     with col3:
-        st.metric("Cluster Coverage",  f"{cluster_coverage:.1f}%")
+        st.metric("Cluster Coverage", f"{cluster_coverage:.1f}%")
     with col4:
         st.metric("Avg Headers/README", f"{avg_headers:.1f}")
 
@@ -1484,7 +1726,7 @@ def show_data_quality():
 
     st.markdown("---")
     report_md = f"""# Data Quality Report
-Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
+Generated: {pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 ## Pipeline
 
@@ -1499,21 +1741,23 @@ Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
 - Clusters: {total_clusters}
 """
     st.download_button(
-        label="Download Data Quality Report (Markdown)", data=report_md,
-        file_name=f"data_quality_report_{ts}.md", mime="text/markdown"
+        label="Download Data Quality Report (Markdown)",
+        data=report_md,
+        file_name=f"data_quality_report_{ts}.md",
+        mime="text/markdown",
     )
 
 
 def show_somef_validation():
     """SOMEF metadata extraction results page."""
-    ts = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
+    ts = pd.Timestamp.now().strftime("%Y%m%d_%H%M")
     data = load_somef_stats()
 
     if data["total"] == 0:
         st.info(
             "No SOMEF results yet. Run step 7 to populate this page:\n\n"
             "```bash\n"
-            "pip install -e \".[somef]\"\n"
+            'pip install -e ".[somef]"\n'
             "python -X utf8 step7_somef_validation.py --limit 200 --threshold 0.8\n"
             "```"
         )
@@ -1535,19 +1779,23 @@ def show_somef_validation():
     st.subheader("📊 Category Coverage")
     st.caption("How many repos had each SOMEF category detected (out of total validated).")
 
-    cat_df = pd.DataFrame({
-        "Category": [c.capitalize() for c in data["categories"]],
-        "Repos":    [data["cat_counts"][c] for c in data["categories"]],
-        "Coverage %": [
-            round(data["cat_counts"][c] / data["total"] * 100, 1)
-            for c in data["categories"]
-        ],
-    }).sort_values("Repos", ascending=False)
+    cat_df = pd.DataFrame(
+        {
+            "Category": [c.capitalize() for c in data["categories"]],
+            "Repos": [data["cat_counts"][c] for c in data["categories"]],
+            "Coverage %": [
+                round(data["cat_counts"][c] / data["total"] * 100, 1) for c in data["categories"]
+            ],
+        }
+    ).sort_values("Repos", ascending=False)
 
     fig = px.bar(
-        cat_df, x="Category", y="Coverage %",
+        cat_df,
+        x="Category",
+        y="Coverage %",
         text="Repos",
-        color="Coverage %", color_continuous_scale="Blues",
+        color="Coverage %",
+        color_continuous_scale="Blues",
         labels={"Coverage %": "Coverage (%)"},
     )
     fig.update_traces(textposition="outside")
@@ -1557,11 +1805,14 @@ def show_somef_validation():
     st.dataframe(
         cat_df,
         column_config={
-            "Category":   st.column_config.TextColumn("Category",    width="medium"),
-            "Repos":      st.column_config.NumberColumn("# Repos",   width="small"),
-            "Coverage %": st.column_config.NumberColumn("Coverage %", format="%.1f%%", width="small"),
+            "Category": st.column_config.TextColumn("Category", width="medium"),
+            "Repos": st.column_config.NumberColumn("# Repos", width="small"),
+            "Coverage %": st.column_config.NumberColumn(
+                "Coverage %", format="%.1f%%", width="small"
+            ),
         },
-        hide_index=True, use_container_width=True,
+        hide_index=True,
+        use_container_width=True,
     )
 
     # ── Per-repo browser ──────────────────────────────────────────────────
@@ -1581,24 +1832,37 @@ def show_somef_validation():
 
     st.markdown(f"**Showing {len(filtered):,} of {len(df):,} repos**")
     st.dataframe(
-        filtered[["name", "categories_found", "categories", "processing_s", "somef_version", "error", "url"]].head(500),
+        filtered[
+            [
+                "name",
+                "categories_found",
+                "categories",
+                "processing_s",
+                "somef_version",
+                "error",
+                "url",
+            ]
+        ].head(500),
         column_config={
-            "name":             st.column_config.TextColumn("Repository",        width="medium"),
-            "categories_found": st.column_config.NumberColumn("# Categories",    width="small"),
-            "categories":       st.column_config.TextColumn("Categories Found",  width="large"),
-            "processing_s":     st.column_config.NumberColumn("Time (s)",        format="%.1f", width="small"),
-            "somef_version":    st.column_config.TextColumn("SOMEF Version",     width="small"),
-            "error":            st.column_config.TextColumn("Error",             width="medium"),
-            "url":              st.column_config.LinkColumn("Link",              width="medium"),
+            "name": st.column_config.TextColumn("Repository", width="medium"),
+            "categories_found": st.column_config.NumberColumn("# Categories", width="small"),
+            "categories": st.column_config.TextColumn("Categories Found", width="large"),
+            "processing_s": st.column_config.NumberColumn("Time (s)", format="%.1f", width="small"),
+            "somef_version": st.column_config.TextColumn("SOMEF Version", width="small"),
+            "error": st.column_config.TextColumn("Error", width="medium"),
+            "url": st.column_config.LinkColumn("Link", width="medium"),
         },
-        hide_index=True, use_container_width=True, height=500,
+        hide_index=True,
+        use_container_width=True,
+        height=500,
     )
 
     st.markdown("---")
     st.download_button(
         label=f"Download {len(filtered)} SOMEF Results (CSV)",
         data=filtered.drop(columns=["run_date"], errors="ignore").to_csv(index=False),
-        file_name=f"somef_results_{ts}.csv", mime="text/csv",
+        file_name=f"somef_results_{ts}.csv",
+        mime="text/csv",
     )
 
 
@@ -1827,14 +2091,11 @@ def show_gap_analysis():
     mapped_df, unmapped_df = load_gap_analysis_data()
 
     if mapped_df.empty and unmapped_df.empty:
-        st.info(
-            "No gap analysis data yet. "
-            "Run **Step 11 — CodeMeta Gap Analysis** workflow first."
-        )
+        st.info("No gap analysis data yet. Run **Step 11 — CodeMeta Gap Analysis** workflow first.")
         return
 
     total_clusters = len(mapped_df) + len(unmapped_df)
-    n_mapped   = len(mapped_df)
+    n_mapped = len(mapped_df)
     n_unmapped = len(unmapped_df)
     pct_mapped = n_mapped / total_clusters * 100 if total_clusters else 0
 
@@ -1844,14 +2105,18 @@ def show_gap_analysis():
     with col1:
         st.metric("Total Clusters", total_clusters)
     with col2:
-        st.metric("Mapped to CodeMeta", n_mapped,
-                  delta=f"{pct_mapped:.0f}% of clusters")
+        st.metric("Mapped to CodeMeta", n_mapped, delta=f"{pct_mapped:.0f}% of clusters")
     with col3:
-        st.metric("Unmapped Gaps", n_unmapped,
-                  delta=f"{100 - pct_mapped:.0f}% of clusters",
-                  delta_color="inverse")
+        st.metric(
+            "Unmapped Gaps",
+            n_unmapped,
+            delta=f"{100 - pct_mapped:.0f}% of clusters",
+            delta_color="inverse",
+        )
     with col4:
-        high_pri = len(unmapped_df[unmapped_df["priority"] == "high"]) if not unmapped_df.empty else 0
+        high_pri = (
+            len(unmapped_df[unmapped_df["priority"] == "high"]) if not unmapped_df.empty else 0
+        )
         st.metric("High-Priority Gaps", high_pri)
 
     st.markdown("---")
@@ -1878,13 +2143,15 @@ def show_gap_analysis():
             orientation="h",
             color="headers_covered",
             color_continuous_scale="Blues",
-            labels={"headers_covered": "README Headers Covered",
-                    "codemeta_property": "CodeMeta Property"},
+            labels={
+                "headers_covered": "README Headers Covered",
+                "codemeta_property": "CodeMeta Property",
+            },
             height=max(300, len(coverage) * 35),
         )
         fig.update_layout(
             coloraxis_showscale=False,
-            margin=dict(l=10, r=10, t=10, b=10),
+            margin={"l": 10, "r": 10, "t": 10, "b": 10},
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -1898,17 +2165,17 @@ def show_gap_analysis():
         st.caption("Clusters classified to an existing CodeMeta property.")
         if not mapped_df.empty:
             display_mapped = mapped_df.copy()
-            display_mapped["confidence"] = display_mapped["confidence"].map(
-                lambda x: f"{x:.0%}"
-            )
+            display_mapped["confidence"] = display_mapped["confidence"].map(lambda x: f"{x:.0%}")
             st.dataframe(
-                display_mapped.rename(columns={
-                    "cluster_name":      "Cluster",
-                    "cluster_size":      "Headers",
-                    "codemeta_property": "CodeMeta Property",
-                    "confidence":        "Confidence",
-                    "mapping_method":    "Method",
-                })[["Cluster", "Headers", "CodeMeta Property", "Confidence", "Method"]],
+                display_mapped.rename(
+                    columns={
+                        "cluster_name": "Cluster",
+                        "cluster_size": "Headers",
+                        "codemeta_property": "CodeMeta Property",
+                        "confidence": "Confidence",
+                        "mapping_method": "Method",
+                    }
+                )[["Cluster", "Headers", "CodeMeta Property", "Confidence", "Method"]],
                 use_container_width=True,
                 hide_index=True,
             )
@@ -1923,12 +2190,14 @@ def show_gap_analysis():
                 lambda p: f"{PRIORITY_COLOUR.get(p, '')} {p}"
             )
             st.dataframe(
-                display_unmapped.rename(columns={
-                    "cluster_name":           "Cluster",
-                    "cluster_size":           "Headers",
-                    "proposed_property_name": "Proposed Property",
-                    "priority":               "Priority",
-                })[["Cluster", "Headers", "Proposed Property", "Priority"]],
+                display_unmapped.rename(
+                    columns={
+                        "cluster_name": "Cluster",
+                        "cluster_size": "Headers",
+                        "proposed_property_name": "Proposed Property",
+                        "priority": "Priority",
+                    }
+                )[["Cluster", "Headers", "Proposed Property", "Priority"]],
                 use_container_width=True,
                 hide_index=True,
             )
@@ -1967,14 +2236,14 @@ def show_gap_analysis():
                 "<extra></extra>"
             )
         )
-        fig2.update_layout(margin=dict(l=10, r=10, t=10, b=10))
+        fig2.update_layout(margin={"l": 10, "r": 10, "t": 10, "b": 10})
         st.plotly_chart(fig2, use_container_width=True)
 
     st.markdown("---")
 
     # ── Download ──────────────────────────────────────────────────────────
     st.subheader("📥 Export")
-    ts = pd.Timestamp.now().strftime('%Y%m%d_%H%M')
+    ts = pd.Timestamp.now().strftime("%Y%m%d_%H%M")
     dl1, dl2 = st.columns(2)
     with dl1:
         if not mapped_df.empty:
