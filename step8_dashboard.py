@@ -624,6 +624,7 @@ def main():
             "Data Quality",
             "Search",
             "Cluster Explorer",
+            "Experiment History",
             "SOMEF Validation",
             "Gap Analysis",
             "Visualization",
@@ -636,6 +637,7 @@ def main():
     PAGE_TITLES = {
         "Overview": "📊 Research Software Metadata Analyser",
         "Cluster Explorer": "🔍 Cluster Explorer",
+        "Experiment History": "🧪 Experiment History",
         "License Analysis": "📄 License Analysis",
         "Repository Browser": "📚 Repository Browser",
         "Data Quality": "📋 Data Quality Report",
@@ -693,6 +695,8 @@ def main():
         show_overview(stats)
     elif page == "Cluster Explorer":
         show_cluster_explorer(stats.get("run_id"))
+    elif page == "Experiment History":
+        show_experiment_history()
     elif page == "License Analysis":
         show_license_analysis()
     elif page == "Repository Browser":
@@ -818,6 +822,138 @@ def show_overview(stats):
         st.metric("Smallest Cluster", f"{cluster_df['size'].min()}")
     with col4:
         st.metric("Largest Cluster", f"{cluster_df['size'].max()}")
+
+
+@st.cache_data(ttl=300)
+def load_experiment_history() -> "pd.DataFrame":
+    """Load all AnalysisRun rows with a populated config_snapshot, newest first.
+
+    Returns a flat DataFrame with columns:
+        run_id, run_date, min_level, method, merge_threshold,
+        best_k, best_silhouette, n_clusters_after_merge, n_merges
+    Returns an empty DataFrame gracefully if the table has no records yet.
+    """
+    try:
+        from database.models import AnalysisRun
+
+        with get_session_context() as session:
+            rows = (
+                session.query(AnalysisRun)
+                .filter(AnalysisRun.config_snapshot.isnot(None))
+                .order_by(AnalysisRun.run_date.desc())
+                .all()
+            )
+        records = []
+        for r in rows:
+            try:
+                snap = json.loads(r.config_snapshot)
+            except (ValueError, TypeError):
+                continue
+            inp = snap.get("input", {})
+            out = snap.get("outcome", {})
+            records.append(
+                {
+                    "run_id": r.run_id,
+                    "run_date": r.run_date,
+                    "min_level": inp.get("min_level"),
+                    "method": inp.get("method"),
+                    "merge_threshold": inp.get("merge_threshold", 0.0),
+                    "best_k": out.get("best_k"),
+                    "best_silhouette": out.get("best_silhouette"),
+                    "n_clusters_before_merge": out.get("n_clusters_before_merge"),
+                    "n_clusters_after_merge": out.get("n_clusters_after_merge"),
+                    "n_merges": out.get("n_merges", 0),
+                    "total_headers": out.get("total_headers_clustered"),
+                    "mean_cluster_size": out.get("mean_cluster_size"),
+                    "_config_snapshot": r.config_snapshot,  # kept for drill-down
+                }
+            )
+        return pd.DataFrame(records)
+    except Exception:
+        return pd.DataFrame()
+
+
+def show_experiment_history():
+    """Experiment History page — tracks clustering runs for comparison and reporting."""
+    df = load_experiment_history()
+
+    if df.empty:
+        st.info(
+            "No experiment history yet. Run step 6 at least once — "
+            "experiment data will appear here automatically."
+        )
+        return
+
+    st.markdown(f"**{len(df)} clustering run(s) recorded**")
+
+    display_cols = [
+        "run_id", "run_date", "min_level", "method",
+        "merge_threshold", "best_k", "best_silhouette",
+        "n_clusters_before_merge", "n_clusters_after_merge", "n_merges",
+    ]
+    fmt = {"best_silhouette": "{:.4f}", "merge_threshold": "{:.2f}"}
+    st.dataframe(
+        df[display_cols].style.format(fmt, na_rep="—"),
+        use_container_width=True,
+    )
+
+    # Comparison charts — only when there are ≥ 2 runs
+    if len(df) >= 2:
+        chart_df = df.sort_values("run_date")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("Silhouette Score over Time")
+            fig = px.line(
+                chart_df,
+                x="run_date",
+                y="best_silhouette",
+                markers=True,
+                hover_data=["run_id", "min_level", "merge_threshold"],
+                labels={"run_date": "Run Date", "best_silhouette": "Best Silhouette"},
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            st.subheader("Cluster Count over Time")
+            fig2 = px.bar(
+                chart_df,
+                x="run_date",
+                y="n_clusters_after_merge",
+                color=chart_df["min_level"].astype(str),
+                hover_data=["run_id", "merge_threshold", "n_merges"],
+                labels={
+                    "n_clusters_after_merge": "Final Cluster Count",
+                    "run_date": "Run Date",
+                    "color": "min_level",
+                },
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+
+    # Per-run drill-down
+    st.subheader("Run Detail")
+    selected = st.selectbox("Select run", df["run_id"].tolist())
+    if selected:
+        row = df[df["run_id"] == selected].iloc[0]
+        try:
+            snap = json.loads(row["_config_snapshot"])
+        except (ValueError, TypeError):
+            snap = {}
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Input parameters**")
+            st.json(snap.get("input", {}))
+        with col2:
+            st.markdown("**Outcome metrics**")
+            st.json(snap.get("outcome", {}))
+
+        merge_log = snap.get("merge_log", [])
+        if merge_log:
+            st.markdown("**Merge log**")
+            st.dataframe(pd.DataFrame(merge_log), use_container_width=True)
+        else:
+            st.caption("No merges applied in this run.")
 
 
 def show_cluster_explorer(run_id):
