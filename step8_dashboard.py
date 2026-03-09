@@ -157,18 +157,28 @@ def load_cluster_data(run_id=None):
 
 @st.cache_data(ttl=300)
 def load_cluster_members(cluster_db_id: int, limit: int = 20):
-    """Load actual member headers for a cluster, ordered by distance to centroid.
+    """Load deduplicated member headers for a cluster, ordered by distance to centroid.
+    Returns (header_text, min_distance, count) tuples — duplicate header texts are
+    collapsed and their count is shown so the list isn't dominated by a single common
+    header repeated hundreds of times.
     Refreshed automatically on each workflow run (ttl=300s cache)."""
     with get_session_context() as session:
+        from sqlalchemy import func as sa_func
+
         rows = (
-            session.query(ReadmeHeader.header_text, HeaderClusterAssignment.distance)
+            session.query(
+                ReadmeHeader.header_text,
+                sa_func.min(HeaderClusterAssignment.distance).label("min_dist"),
+                sa_func.count(ReadmeHeader.id).label("cnt"),
+            )
             .join(HeaderClusterAssignment, HeaderClusterAssignment.header_id == ReadmeHeader.id)
             .filter(HeaderClusterAssignment.cluster_id == cluster_db_id)
-            .order_by(HeaderClusterAssignment.distance.asc())
+            .group_by(ReadmeHeader.header_text)
+            .order_by(sa_func.min(HeaderClusterAssignment.distance).asc())
             .limit(limit)
             .all()
         )
-        return [(r.header_text, r.distance) for r in rows]
+        return [(r.header_text, r.min_dist, r.cnt) for r in rows]
 
 
 @st.cache_data(ttl=300)
@@ -939,16 +949,21 @@ No manual labelling was applied — names reflect the dominant vocabulary in eac
             st.markdown(f"**Cluster ID:** {row['cluster_id']}")
             st.markdown(f"**Size:** {row['size']} headers")
 
-            st.markdown("**20 most representative headers (closest to cluster centre):**")
+            st.markdown("**20 most representative unique headers (closest to cluster centre):**")
             members = load_cluster_members(int(row["id"]), limit=20)
             if members:
-                for i, (header_text, dist) in enumerate(members, 1):
+                for i, (header_text, dist, cnt) in enumerate(members, 1):
+                    count_str = (
+                        f"  <span style='color:#888;font-size:0.8em'>×{cnt}</span>"
+                        if cnt > 1
+                        else ""
+                    )
                     dist_str = (
                         f"  <span style='color:grey;font-size:0.8em'>dist={dist:.3f}</span>"
                         if dist is not None
                         else ""
                     )
-                    st.markdown(f"{i}. `{header_text}`{dist_str}", unsafe_allow_html=True)
+                    st.markdown(f"{i}. `{header_text}`{count_str}{dist_str}", unsafe_allow_html=True)
             else:
                 # fallback: use stored representative headers if live query returns nothing
                 for i, header in enumerate(row["representative_headers"][:20], 1):
