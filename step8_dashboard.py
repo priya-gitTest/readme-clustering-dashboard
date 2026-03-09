@@ -990,7 +990,8 @@ No manual labelling was applied — names reflect the dominant vocabulary in eac
 
     # Display clusters
     for _, row in cluster_df.iterrows():
-        with st.expander(f"**{row['name']}** ({row['size']} headers)"):
+        cluster_name = _clean_header_display(row["name"])
+        with st.expander(f"**{cluster_name}** ({row['size']} headers)"):
             st.markdown(f"**Cluster ID:** {row['cluster_id']}")
             st.markdown(f"**Size:** {row['size']} headers")
 
@@ -1012,7 +1013,7 @@ No manual labelling was applied — names reflect the dominant vocabulary in eac
             else:
                 # fallback: use stored representative headers if live query returns nothing
                 for i, header in enumerate(row["representative_headers"][:20], 1):
-                    st.markdown(f"{i}. `{header}`")
+                    st.markdown(f"{i}. `{_clean_header_display(header)}`")
 
 
 def show_visualization():
