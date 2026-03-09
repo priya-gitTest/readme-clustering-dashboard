@@ -158,27 +158,27 @@ def load_cluster_data(run_id=None):
 @st.cache_data(ttl=300)
 def load_cluster_members(cluster_db_id: int, limit: int = 20):
     """Load deduplicated member headers for a cluster, ordered by distance to centroid.
-    Returns (header_text, min_distance, count) tuples — duplicate header texts are
-    collapsed and their count is shown so the list isn't dominated by a single common
-    header repeated hundreds of times.
+    Groups by normalized_text (section numbers and case stripped) so that
+    '1. Installation', '2. Installation', 'INSTALLATION' all collapse into
+    'installation ×N'. Returns (normalized_text, min_distance, count) tuples.
     Refreshed automatically on each workflow run (ttl=300s cache)."""
     with get_session_context() as session:
         from sqlalchemy import func as sa_func
 
         rows = (
             session.query(
-                ReadmeHeader.header_text,
+                ReadmeHeader.normalized_text,
                 sa_func.min(HeaderClusterAssignment.distance).label("min_dist"),
                 sa_func.count(ReadmeHeader.id).label("cnt"),
             )
             .join(HeaderClusterAssignment, HeaderClusterAssignment.header_id == ReadmeHeader.id)
             .filter(HeaderClusterAssignment.cluster_id == cluster_db_id)
-            .group_by(ReadmeHeader.header_text)
+            .group_by(ReadmeHeader.normalized_text)
             .order_by(sa_func.min(HeaderClusterAssignment.distance).asc())
             .limit(limit)
             .all()
         )
-        return [(r.header_text, r.min_dist, r.cnt) for r in rows]
+        return [(r.normalized_text, r.min_dist, r.cnt) for r in rows]
 
 
 @st.cache_data(ttl=300)
