@@ -155,40 +155,75 @@ def load_cluster_data(run_id=None):
     return pd.DataFrame(cluster_data)
 
 
+import re as _re
+
+# Applied at display time — independent of what is stored in normalized_text.
+_DISPLAY_SECTION_RE = _re.compile(r'^\d+(\.\d+)*\.?\s+')
+_DISPLAY_EMOJI_RE = _re.compile(
+    u'[\U0001F000-\U0001FFFF'   # broad emoji block
+    u'\U00002600-\U000027BF'    # misc symbols + dingbats
+    u'\u2300-\u23FF'            # misc technical
+    u'\uFE00-\uFE0F'            # variation selectors
+    u'\u200D'                   # zero-width joiner
+    u']+',
+    _re.UNICODE,
+)
+
+
+def _clean_header_display(text: str) -> str:
+    """Normalise a header text purely for display grouping.
+
+    Strips: leading section numbers, leading/trailing emojis,
+    trailing punctuation (:, ?, .), and surrounding whitespace.
+    """
+    if not text:
+        return ''
+    t = _DISPLAY_SECTION_RE.sub('', text)
+    t = _DISPLAY_EMOJI_RE.sub('', t)
+    t = t.strip().rstrip(':?. ')
+    return t.strip()
+
+
 @st.cache_data(ttl=300)
 def load_cluster_members(cluster_db_id: int, limit: int = 20):
     """Load deduplicated member headers for a cluster, ordered by distance to centroid.
-    Strips leading section numbers (e.g. '4 ', '2. ', '1.2. ') in SQL at query time,
-    so '4 installation', '2. installation', 'installation' all collapse into one row.
-    Works regardless of what is stored in normalized_text.
+
+    SQL groups by raw normalized_text (fast, accurate counts). Python then applies
+    comprehensive display normalisation (section numbers, emojis, trailing punctuation)
+    and re-merges groups, so counts stay accurate and any stored-data quirks are handled.
     Returns (display_text, min_distance, count) tuples.
     Refreshed automatically on each workflow run (ttl=300s cache)."""
     with get_session_context() as session:
-        from sqlalchemy import func as sa_func, text as sa_text
+        from sqlalchemy import func as sa_func
 
-        # Strip leading section numbers (e.g. "4 ", "2. ", "1.2. ") directly in SQL
-        # so that "4 installation", "2. installation", "installation" all group together.
-        # This is robust regardless of what is stored in normalized_text.
-        clean_text = sa_func.regexp_replace(
-            ReadmeHeader.normalized_text,
-            r'^\d+(\.\d+)*\.?\s+',
-            '',
-        )
-
+        # Fetch all unique normalized_text values for this cluster (no LIMIT —
+        # there are typically only a few hundred unique texts per cluster).
         rows = (
             session.query(
-                clean_text.label("display_text"),
+                ReadmeHeader.normalized_text,
                 sa_func.min(HeaderClusterAssignment.distance).label("min_dist"),
                 sa_func.count(ReadmeHeader.id).label("cnt"),
             )
             .join(HeaderClusterAssignment, HeaderClusterAssignment.header_id == ReadmeHeader.id)
             .filter(HeaderClusterAssignment.cluster_id == cluster_db_id)
-            .group_by(clean_text)
-            .order_by(sa_func.min(HeaderClusterAssignment.distance).asc())
-            .limit(limit)
+            .group_by(ReadmeHeader.normalized_text)
             .all()
         )
-        return [(r.display_text, r.min_dist, r.cnt) for r in rows]
+
+    # Re-group in Python with full normalisation.
+    merged: dict[str, list] = {}  # key → [min_dist, total_count]
+    for text, min_dist, cnt in rows:
+        key = _clean_header_display(text or '')
+        if not key:
+            continue
+        if key not in merged:
+            merged[key] = [min_dist, cnt]
+        else:
+            merged[key][0] = min(merged[key][0], min_dist)
+            merged[key][1] += cnt
+
+    result = sorted(merged.items(), key=lambda x: x[1][0])
+    return [(text, data[0], data[1]) for text, data in result[:limit]]
 
 
 @st.cache_data(ttl=300)
