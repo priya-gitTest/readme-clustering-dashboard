@@ -961,7 +961,7 @@ def show_cluster_explorer(run_id):
     """Cluster explorer page"""
 
     # ── Researcher context ────────────────────────────────────────────────────
-    with st.expander("📖 How these clusters were built — decisions, limitations & quality checks", expanded=False):
+    with st.expander("📖 How these clusters were built — decisions, limitations & quality checks", expanded=True):
         st.markdown("""
 ### What is being clustered?
 
@@ -1081,7 +1081,7 @@ are visible in the **Experiment History** page for comparison across runs.
         col5.metric("Merges applied", int(n_merges) if n_merges else 0)
 
     # ── Methodology / rationale ──────────────────────────────────────────────
-    with st.expander("ℹ️ About this analysis", expanded=False):
+    with st.expander("ℹ️ About this analysis", expanded=True):
         total_headers = sum(cluster_df["size"])
         total_clusters = len(cluster_df)
         avg_size = cluster_df["size"].mean()
@@ -1267,8 +1267,8 @@ No manual labelling was applied — names reflect the dominant vocabulary in eac
             st.markdown(f"**Cluster ID:** {row['cluster_id']}")
             st.markdown(f"**Size:** {row['size']} headers")
 
-            st.markdown("**20 most representative unique headers (closest to cluster centre):**")
-            members = load_cluster_members(int(row["id"]), limit=20)
+            st.markdown("**30 most representative unique headers (closest to cluster centre):**")
+            members = load_cluster_members(int(row["id"]), limit=30)
             if members:
                 for i, (header_text, dist, cnt) in enumerate(members, 1):
                     count_str = (
@@ -1284,7 +1284,7 @@ No manual labelling was applied — names reflect the dominant vocabulary in eac
                     st.markdown(f"{i}. `{header_text}`{count_str}{dist_str}", unsafe_allow_html=True)
             else:
                 # fallback: use stored representative headers if live query returns nothing
-                for i, header in enumerate(row["representative_headers"][:20], 1):
+                for i, header in enumerate(row["representative_headers"][:30], 1):
                     st.markdown(f"{i}. `{_clean_header_display(header)}`")
 
 
