@@ -338,6 +338,7 @@ def load_repository_details():
                     "language": getattr(repo, "language", "Unknown") or "Unknown",
                     "description": desc[:100] + "..." if len(desc) > 100 else desc,
                     "source": getattr(repo, "source", None) or "unknown",
+                    "platform": getattr(repo, "platform", None) or "unknown",
                 }
             )
     return pd.DataFrame(rows)
@@ -622,10 +623,10 @@ def main():
             "Repository Browser",
             "License Analysis",
             "Data Quality",
-            "Search",
+            "Header Cluster Lookup",
             "Cluster Explorer",
             "Experiment History",
-            "SOMEF Validation",
+            # "SOMEF Validation",  # disabled — SOMEF pipeline paused
             "Gap Analysis",
             "Visualization",
             "Export",
@@ -642,7 +643,7 @@ def main():
         "Repository Browser": "📚 Repository Browser",
         "Data Quality": "📋 Data Quality Report",
         "Visualization": "📊 Embedding Visualization",
-        "Search": "🔎 Header Search",
+        "Header Cluster Lookup": "🔎 Header Cluster Lookup",
         "SOMEF Validation": "🔬 SOMEF Metadata Validation",
         "Gap Analysis": "🗺️ CodeMeta Gap Analysis",
         "Export": "📥 Export Results",
@@ -709,7 +710,7 @@ def main():
         show_data_quality()
     elif page == "Visualization":
         show_visualization()
-    elif page == "Search":
+    elif page == "Header Cluster Lookup":
         show_search()
     elif page == "Export":
         show_export(stats.get("run_id"))
@@ -959,11 +960,125 @@ def show_experiment_history():
 def show_cluster_explorer(run_id):
     """Cluster explorer page"""
 
+    # ── Researcher context ────────────────────────────────────────────────────
+    with st.expander("📖 How these clusters were built — decisions, limitations & quality checks", expanded=False):
+        st.markdown("""
+### What is being clustered?
+
+All README section headers (H1–H5) extracted from research software repositories
+across three sources: **JOSS**, **Research Software Directory**, and **Helmholtz**.
+Each header is treated as a short text and embedded into a 384-dimensional semantic
+vector using the `all-MiniLM-L6-v2` sentence-transformer model. K-Means is then run
+on those vectors to group semantically similar headers into clusters.
+
+---
+
+### Design decisions made (and why)
+
+| Decision | What we did | Why |
+|----------|-------------|-----|
+| **Exclude H1 headers** | `--min-level 2` excludes H1 from clustering | H1 is almost always the project name (e.g. "MyTool / A Python library for…"). Including it creates noise clusters like "cutadapt / sdmbench / name" that don't reflect documentation structure. |
+| **Strip section numbers** | "1. Installation" → "installation" before embedding | Many READMEs number their sections. Without stripping, "1. Installation" and "2. Installation" appear as different headers and split the same concept across clusters. |
+| **Automatic k selection** | Silhouette score sweep over a k range | Rather than fixing k manually, we sweep a range and pick the k with the highest silhouette score — a measure of how well-separated the clusters are. |
+| **Post-hoc merging** | `--merge-threshold` cosine similarity merge | Even with optimal k, semantically near-identical clusters sometimes split (e.g. "Getting Started" and "Quick Start"). Post-hoc merging computes centroid cosine similarity and merges pairs above the threshold. |
+
+---
+
+### Known limitations
+
+**Misspellings land in wrong clusters**
+The embedding model has no spell-correction. `ackowledgements` (missing 'n') produces
+a different vector from `acknowledgements` and can drift into an unrelated cluster
+(e.g. "Functionality"). This is tracked automatically — see the **Spelling Variants**
+section in each run's `.history/clustering/run_*.md` report.
+
+**Project-specific headers don't generalise**
+Headers like `"obiba acknowledgments"` or `"how to build and run the rsd"` contain
+project names that pull their embedding away from the generic concept cluster.
+These show up as outliers near the edge of a cluster (high distance to centroid).
+
+**Cluster names are auto-generated**
+Each cluster name is computed from the 3 most frequent words across the 5 headers
+closest to the centroid. The name is a heuristic, not a manual label — it reflects
+the dominant vocabulary but may not capture every member.
+
+**Short or ambiguous headers**
+Single-word headers like `"code"` or `"methods"` are ambiguous and may appear in
+multiple semantically distinct clusters depending on surrounding context.
+
+---
+
+### Quality checks run after each pipeline execution
+
+| Check | What it does |
+|-------|-------------|
+| **Probe pairs** | 8 known-similar header pairs (e.g. "installation" / "how to install") are looked up after each run to confirm they co-clustered. A ⚠️ split flags a potential over-split that merging or a lower k might fix. |
+| **Spelling variant detection** | Headers with ≥ 0.75 string similarity to a probe word that landed in a *different* cluster are flagged. These are likely typos (e.g. `ackowledgements`, `acknowlegdements`) whose embeddings drifted away from the correct cluster. |
+| **Merge log** | Records every cluster pair merged, their similarity, and size before/after — so you can trace why the final cluster count differs from the k selected. |
+
+All checks are written to `.history/clustering/run_<run_id>.md` after each run and
+are visible in the **Experiment History** page for comparison across runs.
+
+---
+
+### How to read the cluster members
+
+- **Distance to centroid** — lower = more representative of the cluster's core concept
+- **×N** — how many repositories use this exact normalized header text
+- **Raw text shown** — the original header before normalisation (e.g. `"1. Installation"`)
+  is shown where it differs from the normalized form
+""")
+
+    # ── Run selector ─────────────────────────────────────────────────────────
+    hist_df = load_experiment_history()
+    selected_hist = None
+    if not hist_df.empty:
+        def _run_label(r):
+            parts = []
+            if r["min_level"] is not None:
+                parts.append(f"min_level={int(r['min_level'])}")
+            if r["best_k"] is not None:
+                parts.append(f"k={int(r['best_k'])}")
+            if r["merge_threshold"]:
+                parts.append(f"merge={r['merge_threshold']}")
+            return f"{r['run_id']}  —  {', '.join(parts)}" if parts else r["run_id"]
+
+        options = hist_df["run_id"].tolist()
+        labels = [_run_label(hist_df[hist_df["run_id"] == rid].iloc[0]) for rid in options]
+        label_to_run = dict(zip(labels, options))
+
+        default_label = next(
+            (lbl for lbl, rid in label_to_run.items() if rid == run_id),
+            labels[0],
+        )
+        selected_label = st.selectbox(
+            "Select clustering run",
+            options=labels,
+            index=labels.index(default_label),
+            help="Choose which clustering run to explore. Each run may use different parameters.",
+        )
+        run_id = label_to_run[selected_label]
+        selected_hist = hist_df[hist_df["run_id"] == run_id].iloc[0]
+
     cluster_df = load_cluster_data(run_id)
 
     if cluster_df.empty:
         st.info("No cluster data yet — run the full pipeline first.")
         return
+
+    # ── Config summary metrics ────────────────────────────────────────────────
+    if selected_hist is not None:
+        col1, col2, col3, col4, col5 = st.columns(5)
+        min_lvl = selected_hist["min_level"]
+        col1.metric("Min level", f"H{int(min_lvl)}" if min_lvl is not None else "H1")
+        best_k_val = selected_hist["best_k"]
+        col2.metric("k (clusters)", int(best_k_val) if best_k_val is not None else "—")
+        sil = selected_hist["best_silhouette"]
+        col3.metric("Silhouette", f"{sil:.4f}" if sil is not None else "—")
+        merge_t = selected_hist["merge_threshold"]
+        col4.metric("Merge threshold", merge_t if merge_t else "off")
+        n_merges = selected_hist["n_merges"]
+        col5.metric("Merges applied", int(n_merges) if n_merges else 0)
 
     # ── Methodology / rationale ──────────────────────────────────────────────
     with st.expander("ℹ️ About this analysis", expanded=False):
@@ -982,6 +1097,30 @@ def show_cluster_explorer(run_id):
             k_range_str = "sweep not yet recorded"
             k_method_str = "set manually"
 
+        # Derive dynamic values from selected run config
+        if selected_hist is not None:
+            _min_lvl = selected_hist["min_level"]
+            _merge_t = selected_hist["merge_threshold"]
+            _n_merges = int(selected_hist["n_merges"]) if selected_hist["n_merges"] else 0
+        else:
+            _min_lvl = None
+            _merge_t = None
+            _n_merges = 0
+
+        if _min_lvl is not None and int(_min_lvl) >= 2:
+            header_levels_str = f"H{int(_min_lvl)} – H5 (H1 project-name headings excluded)"
+            h1_note = "- **H1 excluded:** Project-name headings (e.g. \"MyTool / Description\") were omitted — they inflate cluster noise without reflecting documentation structure."
+        else:
+            header_levels_str = "H1 – H5 (all Markdown heading levels)"
+            h1_note = ("- **Why H1 headers are included:** H1 headings sometimes carry meaningful topic labels\n"
+                       "  (e.g. \"Getting started\", \"API reference\") alongside project-name uses — including them\n"
+                       "  lets the clustering vocabulary reflect the full heading practice in the corpus.\n"
+                       "  To exclude H1 headers, re-run step 6 with `--min-level 2`.")
+
+        merge_row = ""
+        if _merge_t and float(_merge_t) > 0:
+            merge_row = f"\n| Post-hoc merging | threshold {_merge_t} — {_n_merges} cluster pair(s) merged |"
+
         st.markdown(f"""
 **What was clustered**
 
@@ -990,8 +1129,8 @@ def show_cluster_explorer(run_id):
 | Total headers clustered | {total_headers:,} |
 | Number of clusters (k) | {total_clusters} |
 | Average cluster size | {avg_size:.0f} headers |
-| Header levels included | H1 – H5 (all Markdown heading levels) |
-| Source | README files from JOSS, Research Software Directory, and Helmholtz repositories |
+| Header levels included | {header_levels_str} |
+| Source | README files from JOSS, Research Software Directory, and Helmholtz repositories |{merge_row}
 
 **Header preprocessing (step 5)**
 
@@ -1001,10 +1140,7 @@ Before clustering, each raw header was filtered and normalised:
 - **Excluded:** version strings (`1.2.0`, `v1.0`), dates (`2024-01-05`), and pure digit strings
 - **Stripped:** leading section numbers ("1. Installation" → "installation")
 - **Normalised:** lowercased and whitespace-trimmed
-- **Why H1 headers are included:** H1 headings sometimes carry meaningful topic labels
-  (e.g. "Getting started", "API reference") alongside project-name uses — including them
-  lets the clustering vocabulary reflect the full heading practice in the corpus.
-  To exclude H1 headers, re-run step 6 with `--min-level 2`.
+{h1_note}
 
 **Embedding model — `all-MiniLM-L6-v2`**
 
@@ -1227,72 +1363,109 @@ def show_visualization():
 
 
 def show_search():
-    """Search page"""
+    """Header Cluster Lookup page — keyword search grouped by unique header text."""
 
-    search_query = st.text_input("Search for headers", "")
+    st.caption(
+        "**Keyword search** across all README header texts in the corpus. "
+        "Type a word or phrase and see every unique header variant that contains it, "
+        "how many repositories use it, and which cluster it was assigned to. "
+        "Expand any row to browse the individual repositories."
+    )
 
-    if search_query:
-        # Collect all data within the session context, then render UI outside
-        display_results = []
-        with get_session_context() as session:
-            results = (
-                session.query(ReadmeHeader)
-                .filter(ReadmeHeader.normalized_text.contains(search_query.lower()))
-                .limit(100)
-                .all()
-            )
+    search_query = st.text_input("Search headers by keyword", "", placeholder="e.g.  install,  usage,  contributing,  docker")
 
-            result_ids = [r.id for r in results]
-            cluster_map: dict[int, str] = {}
-            if result_ids:
-                rows = (
-                    session.query(HeaderClusterAssignment.header_id, Cluster.cluster_name)
-                    .join(Cluster, HeaderClusterAssignment.cluster_id == Cluster.id)
-                    .filter(HeaderClusterAssignment.header_id.in_(result_ids))
-                    .all()
+    if not search_query:
+        return
+
+    term = search_query.lower().strip()
+
+    from sqlalchemy import text as sa_text
+
+    groups = []
+    repo_details: dict[str, list] = {}
+
+    with get_session_context() as session:
+        # ── Level 1: aggregated by (normalized_text, cluster) ────────────────
+        agg_rows = session.execute(
+            sa_text("""
+                SELECT
+                    rh.normalized_text,
+                    cl.cluster_name,
+                    COUNT(DISTINCT rh.repository_id) AS repo_count
+                FROM readme_headers rh
+                LEFT JOIN header_cluster_assignments hca ON hca.header_id = rh.id
+                LEFT JOIN clusters cl ON cl.id = hca.cluster_id
+                WHERE rh.normalized_text ILIKE :term
+                GROUP BY rh.normalized_text, cl.cluster_name
+                ORDER BY repo_count DESC
+                LIMIT 50
+            """),
+            {"term": f"%{term}%"},
+        ).fetchall()
+
+        if not agg_rows:
+            st.info(f"No headers found containing **{search_query}**.")
+            return
+
+        groups = [(r[0], r[1], r[2]) for r in agg_rows]
+        unique_texts = list({r[0] for r in groups})
+
+        # ── Level 2: individual repos per normalized_text ────────────────────
+        detail_rows = session.execute(
+            sa_text("""
+                SELECT
+                    rh.normalized_text,
+                    rh.header_text,
+                    r.url,
+                    rh.level,
+                    rh.position
+                FROM readme_headers rh
+                JOIN repositories r ON r.id = rh.repository_id
+                WHERE rh.normalized_text = ANY(:texts)
+                ORDER BY rh.normalized_text, r.url
+                LIMIT 2000
+            """),
+            {"texts": unique_texts},
+        ).fetchall()
+
+        for norm_text, header_text, url, level, pos in detail_rows:
+            repo_details.setdefault(norm_text, []).append((header_text, url, level, pos))
+
+    total_repos = sum(count for _, _, count in groups)
+    st.markdown(
+        f"**{len(groups)} unique header variant(s)** matched — "
+        f"used across **{total_repos:,} repository occurrences** (showing top 50 variants)"
+    )
+
+    for norm_text, cluster_name, repo_count in groups:
+        display_name = _clean_header_display(norm_text or "")
+        cluster_label = cluster_name or "Unassigned"
+        with st.expander(f"`{display_name}` → **{cluster_label}** × {repo_count:,} repos"):
+            repos = repo_details.get(norm_text, [])
+            for header_text, url, level, pos in repos[:25]:
+                raw_label = (
+                    f"  <span style='color:#888;font-size:0.8em'>"
+                    f"(raw: `{header_text}`)</span>"
+                    if header_text.lower() != norm_text
+                    else ""
                 )
-                cluster_map = {r.header_id: r.cluster_name for r in rows}
-
-            # Fetch repo URLs in one query
-            repo_ids = list({r.repository_id for r in results})
-            url_map: dict[int, str] = {}
-            if repo_ids:
-                repo_rows = (
-                    session.query(Repository.id, Repository.url)
-                    .filter(Repository.id.in_(repo_ids))
-                    .all()
+                level_pos = (
+                    f"  <span style='color:#aaa;font-size:0.8em'>H{level} · pos {pos}</span>"
                 )
-                url_map = {r.id: r.url for r in repo_rows}
-
-            # Convert to plain dicts before session closes
-            for result in results:
-                display_results.append(
-                    {
-                        "id": result.id,
-                        "header_text": result.header_text,
-                        "repository_id": result.repository_id,
-                        "repo_url": url_map.get(result.repository_id, ""),
-                        "level": result.level,
-                        "position": result.position,
-                        "cluster": cluster_map.get(result.id, "Unassigned"),
-                    }
-                )
-
-        st.markdown(f"**Found {len(display_results)} results** (showing top 100)")
-        for r in display_results:
-            with st.expander(f"`{r['header_text']}` → **{r['cluster']}**"):
-                st.markdown(f"**Header ID:** {r['id']}")
-                if r["repo_url"]:
-                    st.markdown(f"**Repository:** [{r['repo_url']}]({r['repo_url']})")
-                else:
-                    st.markdown(f"**Repository ID:** {r['repository_id']}")
-                st.markdown(f"**Level:** H{r['level']}")
-                st.markdown(f"**Position:** {r['position']}")
-                st.markdown(f"**Cluster:** {r['cluster']}")
-                if r["cluster"] == "Unassigned" and r["level"] == 1:
-                    st.caption(
-                        "ℹ️ H1 headers are excluded from clustering (typically project names)."
+                if url:
+                    st.markdown(
+                        f"- [{url}]({url}){raw_label}{level_pos}",
+                        unsafe_allow_html=True,
                     )
+                else:
+                    st.markdown(
+                        f"- *(repo URL unavailable)*{raw_label}{level_pos}",
+                        unsafe_allow_html=True,
+                    )
+            if len(repos) > 25:
+                st.caption(f"…and {len(repos) - 25} more repositories")
+            if cluster_label == "Unassigned":
+                st.caption("ℹ️ Not assigned to a cluster — header may be H1 or from a run without clustering.")
 
 
 def show_export(run_id):
@@ -1527,10 +1700,16 @@ def show_repository_browser():
     with col4:
         st.metric("Total Stars", f"{repo_df['stars'].sum():,}")
 
+    # ── Platform summary ──────────────────────────────────────────────────
+    platform_counts = repo_df["platform"].value_counts()
+    plat_cols = st.columns(len(platform_counts))
+    for col, (plat, count) in zip(plat_cols, platform_counts.items()):
+        col.metric(plat.capitalize(), f"{count:,}")
+
     st.markdown("---")
     st.subheader("🔍 Filters")
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         selected_license = st.selectbox(
             "License", ["All"] + sorted(repo_df["license"].unique().tolist())
@@ -1543,6 +1722,9 @@ def show_repository_browser():
         source_options = ["All"] + sorted(repo_df["source"].unique().tolist())
         selected_source = st.selectbox("Source", source_options)
     with col4:
+        platform_options = ["All"] + sorted(repo_df["platform"].unique().tolist())
+        selected_platform = st.selectbox("Platform", platform_options)
+    with col5:
         search_term = st.text_input("Search by name", "")
 
     filtered = repo_df.copy()
@@ -1552,6 +1734,8 @@ def show_repository_browser():
         filtered = filtered[filtered["language"] == selected_language]
     if selected_source != "All":
         filtered = filtered[filtered["source"] == selected_source]
+    if selected_platform != "All":
+        filtered = filtered[filtered["platform"] == selected_platform]
     if search_term:
         filtered = filtered[filtered["name"].str.contains(search_term, case=False, na=False)]
 
@@ -1571,9 +1755,10 @@ def show_repository_browser():
         filtered = filtered.sort_values("name")
 
     st.dataframe(
-        filtered[["name", "license", "language", "stars", "source", "url"]].head(500),
+        filtered[["name", "platform", "license", "language", "stars", "source", "url"]].head(500),
         column_config={
             "name": st.column_config.TextColumn("Repository", width="medium"),
+            "platform": st.column_config.TextColumn("Platform", width="small"),
             "license": st.column_config.TextColumn("License", width="medium"),
             "language": st.column_config.TextColumn("Language", width="small"),
             "stars": st.column_config.NumberColumn("⭐ Stars", width="small"),
