@@ -537,6 +537,68 @@ def load_embeddings_for_viz(max_samples=5000):
     return header_ids, embeddings, assignments
 
 
+@st.cache_data(ttl=600)
+def load_cluster_similarity_matrix(run_id: str | None = None):
+    """Compute pairwise cosine similarity between cluster centroids.
+
+    For each cluster in the given run, averages the embeddings of all assigned
+    headers to get a centroid vector, then computes the full NxN cosine
+    similarity matrix.  Returns (cluster_names, cluster_sizes, sim_matrix).
+    """
+    with get_session_context() as session:
+        # Get clusters for this run
+        if run_id:
+            clusters = (
+                session.query(Cluster)
+                .filter(Cluster.run_id == run_id)
+                .order_by(Cluster.cluster_size.desc())
+                .all()
+            )
+        else:
+            clusters = (
+                session.query(Cluster)
+                .order_by(Cluster.cluster_size.desc())
+                .all()
+            )
+        if not clusters:
+            return [], [], np.array([])
+
+        cluster_names = []
+        cluster_sizes = []
+        centroids = []
+
+        for c in clusters:
+            # Get all embeddings for headers in this cluster
+            rows = (
+                session.query(HeaderEmbedding.embedding_vector)
+                .join(HeaderClusterAssignment, HeaderClusterAssignment.header_id == HeaderEmbedding.header_id)
+                .filter(HeaderClusterAssignment.cluster_id == c.id)
+                .all()
+            )
+            if not rows:
+                continue
+
+            vecs = np.array([np.frombuffer(r[0], dtype=np.float32) for r in rows])
+            centroid = vecs.mean(axis=0)
+            # L2 normalise for cosine similarity
+            norm = np.linalg.norm(centroid)
+            if norm > 0:
+                centroid = centroid / norm
+
+            display_name = _clean_header_display(c.cluster_name) if c.cluster_name else f"Cluster {c.cluster_id}"
+            cluster_names.append(display_name)
+            cluster_sizes.append(c.cluster_size or 0)
+            centroids.append(centroid)
+
+        if len(centroids) < 2:
+            return cluster_names, cluster_sizes, np.array([])
+
+        centroid_matrix = np.array(centroids)
+        # Cosine similarity = dot product of L2-normalised vectors
+        sim_matrix = centroid_matrix @ centroid_matrix.T
+        return cluster_names, cluster_sizes, sim_matrix
+
+
 @st.cache_data(ttl=300)
 def load_gap_analysis_data():
     """Load cluster_codemeta_mappings and unmapped_clusters for the Gap Analysis page."""
@@ -628,6 +690,7 @@ def main():
             "Experiment History",
             # "SOMEF Validation",  # disabled — SOMEF pipeline paused
             "Gap Analysis",
+            "Cluster Similarity Graph",
             "Visualization",
             "Export",
             "Architecture",
@@ -642,6 +705,7 @@ def main():
         "License Analysis": "📄 License Analysis",
         "Repository Browser": "📚 Repository Browser",
         "Data Quality": "📋 Data Quality Report",
+        "Cluster Similarity Graph": "🕸️ Cluster Similarity Graph",
         "Visualization": "📊 Embedding Visualization",
         "Header Cluster Lookup": "🔎 Header Cluster Lookup",
         "SOMEF Validation": "🔬 SOMEF Metadata Validation",
@@ -708,6 +772,8 @@ def main():
         show_gap_analysis()
     elif page == "Data Quality":
         show_data_quality()
+    elif page == "Cluster Similarity Graph":
+        show_cluster_network(stats.get("run_id"))
     elif page == "Visualization":
         show_visualization()
     elif page == "Header Cluster Lookup":
@@ -765,6 +831,37 @@ def show_overview(stats):
             value=f"{coverage:.1f}%",
             delta=f"{stats['total_assignments']:,} assigned",
         )
+
+    # Flashing banner for Cluster Similarity Graph
+    st.markdown("""
+    <style>
+    @keyframes pulse-glow {
+        0%   { opacity: 1; box-shadow: 0 0 5px #4CAF50; }
+        50%  { opacity: 0.85; box-shadow: 0 0 20px #4CAF50, 0 0 40px #4CAF5066; }
+        100% { opacity: 1; box-shadow: 0 0 5px #4CAF50; }
+    }
+    .network-banner {
+        animation: pulse-glow 2s ease-in-out infinite;
+        background: linear-gradient(135deg, #1a472a, #2d5a3f);
+        border: 1px solid #4CAF50;
+        border-radius: 10px;
+        padding: 12px 20px;
+        margin: 10px 0;
+        text-align: center;
+    }
+    .network-banner a {
+        color: #81C784;
+        text-decoration: none;
+        font-weight: bold;
+        font-size: 1.05em;
+    }
+    .network-banner a:hover { color: #A5D6A7; text-decoration: underline; }
+    </style>
+    <div class="network-banner">
+        🕸️ <a href="?page=Cluster+Similarity+Graph">Explore the Cluster Similarity Graph</a>
+        — interactive graph showing how documentation topic clusters relate to each other
+    </div>
+    """, unsafe_allow_html=True)
 
     st.markdown("---")
 
@@ -1360,6 +1457,143 @@ def show_visualization():
         st.plotly_chart(fig, use_container_width=True)
 
         st.success(f"✅ Visualized {len(df):,} headers across {df['cluster'].nunique()} clusters")
+
+
+def show_cluster_network(run_id: str | None = None):
+    """Interactive force-directed network of cluster similarities."""
+    import networkx as nx
+
+    sim_threshold = st.slider(
+        "Similarity threshold (edges shown above this value)",
+        min_value=0.3, max_value=0.95, value=0.6, step=0.05,
+        help="Only connections with cosine similarity above this threshold are shown.",
+    )
+
+    with st.spinner("Computing cluster centroids and similarity matrix..."):
+        names, sizes, sim_matrix = load_cluster_similarity_matrix(run_id)
+
+    if len(names) < 2:
+        st.info("Not enough cluster data to build a network graph.")
+        return
+
+    # Build networkx graph
+    G = nx.Graph()
+    for i, name in enumerate(names):
+        G.add_node(i, label=name, size=sizes[i])
+
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            sim = float(sim_matrix[i][j])
+            if sim >= sim_threshold:
+                G.add_edge(i, j, weight=sim)
+
+    if G.number_of_edges() == 0:
+        st.warning(f"No cluster pairs have similarity >= {sim_threshold:.2f}. Try lowering the threshold.")
+        return
+
+    # Force-directed layout
+    pos = nx.spring_layout(G, k=2.5, iterations=80, seed=42, weight="weight")
+
+    # Edge traces
+    edge_x, edge_y = [], []
+    edge_mid_x, edge_mid_y, edge_labels = [], [], []
+    for u, v, d in G.edges(data=True):
+        x0, y0 = pos[u]
+        x1, y1 = pos[v]
+        edge_x += [x0, x1, None]
+        edge_y += [y0, y1, None]
+        edge_mid_x.append((x0 + x1) / 2)
+        edge_mid_y.append((y0 + y1) / 2)
+        edge_labels.append(f"{names[u]} — {names[v]}<br>similarity: {d['weight']:.3f}")
+
+    edge_trace = go.Scatter(
+        x=edge_x, y=edge_y,
+        line=dict(width=1, color="#aaa"),
+        hoverinfo="none",
+        mode="lines",
+    )
+
+    # Edge hover (invisible midpoints)
+    edge_hover_trace = go.Scatter(
+        x=edge_mid_x, y=edge_mid_y,
+        mode="markers",
+        marker=dict(size=10, color="rgba(0,0,0,0)"),
+        hoverinfo="text",
+        text=edge_labels,
+    )
+
+    # Node trace
+    node_x = [pos[i][0] for i in range(len(names))]
+    node_y = [pos[i][1] for i in range(len(names))]
+
+    # Scale node sizes: min 15, max 60
+    max_size = max(sizes) if sizes else 1
+    node_sizes = [max(15, int(s / max_size * 60)) for s in sizes]
+
+    # Color by number of connections
+    node_degrees = [G.degree(i) for i in range(len(names))]
+
+    node_hover = [
+        f"<b>{names[i]}</b><br>"
+        f"Headers: {sizes[i]:,}<br>"
+        f"Connections: {node_degrees[i]}"
+        for i in range(len(names))
+    ]
+
+    node_trace = go.Scatter(
+        x=node_x, y=node_y,
+        mode="markers+text",
+        text=[n if sizes[i] > max_size * 0.05 else "" for i, n in enumerate(names)],
+        textposition="top center",
+        textfont=dict(size=9),
+        hoverinfo="text",
+        hovertext=node_hover,
+        marker=dict(
+            size=node_sizes,
+            color=node_degrees,
+            colorscale="YlOrRd",
+            colorbar=dict(title="Connections", thickness=15),
+            line=dict(width=1, color="#333"),
+        ),
+    )
+
+    fig = go.Figure(
+        data=[edge_trace, edge_hover_trace, node_trace],
+        layout=go.Layout(
+            title=f"Cluster Similarity Network ({len(names)} clusters, "
+                  f"{G.number_of_edges()} edges at threshold >= {sim_threshold:.2f})",
+            showlegend=False,
+            hovermode="closest",
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            height=750,
+            margin=dict(l=20, r=20, t=50, b=20),
+        ),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Summary stats
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Clusters", len(names))
+    col2.metric("Edges (connections)", G.number_of_edges())
+    avg_sim = np.mean([d["weight"] for _, _, d in G.edges(data=True)]) if G.number_of_edges() > 0 else 0
+    col3.metric("Avg similarity", f"{avg_sim:.3f}")
+
+    # Show strongest connections table
+    with st.expander("Strongest cluster connections", expanded=False):
+        edge_data = [
+            {"Cluster A": names[u], "Cluster B": names[v], "Similarity": round(d["weight"], 4)}
+            for u, v, d in G.edges(data=True)
+        ]
+        edge_df = pd.DataFrame(edge_data).sort_values("Similarity", ascending=False)
+        st.dataframe(edge_df, use_container_width=True, hide_index=True)
+
+    # Show isolated clusters (no connections)
+    isolated = [names[i] for i in range(len(names)) if G.degree(i) == 0]
+    if isolated:
+        with st.expander(f"Isolated clusters ({len(isolated)} — no connections at this threshold)", expanded=False):
+            for name in isolated:
+                st.write(f"- {name}")
 
 
 def show_search():
