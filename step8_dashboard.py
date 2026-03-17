@@ -937,31 +937,31 @@ def load_experiment_history() -> "pd.DataFrame":
                 .order_by(AnalysisRun.run_date.desc())
                 .all()
             )
-        records = []
-        for r in rows:
-            try:
-                snap = json.loads(r.config_snapshot)
-            except (ValueError, TypeError):
-                continue
-            inp = snap.get("input", {})
-            out = snap.get("outcome", {})
-            records.append(
-                {
-                    "run_id": r.run_id,
-                    "run_date": r.run_date,
-                    "min_level": inp.get("min_level"),
-                    "method": inp.get("method"),
-                    "merge_threshold": inp.get("merge_threshold", 0.0),
-                    "best_k": out.get("best_k"),
-                    "best_silhouette": out.get("best_silhouette"),
-                    "n_clusters_before_merge": out.get("n_clusters_before_merge"),
-                    "n_clusters_after_merge": out.get("n_clusters_after_merge"),
-                    "n_merges": out.get("n_merges", 0),
-                    "total_headers": out.get("total_headers_clustered"),
-                    "mean_cluster_size": out.get("mean_cluster_size"),
-                    "_config_snapshot": r.config_snapshot,  # kept for drill-down
-                }
-            )
+            records = []
+            for r in rows:
+                try:
+                    snap = json.loads(r.config_snapshot)
+                except (ValueError, TypeError):
+                    continue
+                inp = snap.get("input", {})
+                out = snap.get("outcome", {})
+                records.append(
+                    {
+                        "run_id": r.run_id,
+                        "run_date": r.run_date,
+                        "min_level": inp.get("min_level"),
+                        "method": inp.get("method"),
+                        "merge_threshold": inp.get("merge_threshold", 0.0),
+                        "best_k": out.get("best_k"),
+                        "best_silhouette": out.get("best_silhouette"),
+                        "n_clusters_before_merge": out.get("n_clusters_before_merge"),
+                        "n_clusters_after_merge": out.get("n_clusters_after_merge"),
+                        "n_merges": out.get("n_merges", 0),
+                        "total_headers": out.get("total_headers_clustered"),
+                        "mean_cluster_size": out.get("mean_cluster_size"),
+                        "_config_snapshot": r.config_snapshot,  # kept for drill-down
+                    }
+                )
         return pd.DataFrame(records)
     except Exception:
         return pd.DataFrame()
