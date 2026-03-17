@@ -848,18 +848,14 @@ def show_overview(stats):
         padding: 12px 20px;
         margin: 10px 0;
         text-align: center;
-    }
-    .network-banner a {
         color: #81C784;
-        text-decoration: none;
-        font-weight: bold;
         font-size: 1.05em;
     }
-    .network-banner a:hover { color: #A5D6A7; text-decoration: underline; }
     </style>
     <div class="network-banner">
-        🕸️ <a href="?page=Cluster+Similarity+Graph">Explore the Cluster Similarity Graph</a>
-        — interactive graph showing how documentation topic clusters relate to each other
+        🕸️ <b>Explore the Cluster Similarity Graph</b>
+        <span style="color:#C8E6C9;">— interactive graph showing how documentation topic clusters relate to each other.
+        Use the sidebar to navigate there.</span>
     </div>
     """, unsafe_allow_html=True)
 
