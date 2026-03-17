@@ -1057,12 +1057,63 @@ def show_experiment_history():
 def show_cluster_explorer(run_id):
     """Cluster explorer page"""
 
+    # ── Fetch latest run config for dynamic methodology text ──────────────────
+    _latest_min_level = 2  # sensible default
+    _latest_merge_t = 0.0
+    _latest_best_k = None
+    try:
+        hist_df = load_experiment_history()
+        if not hist_df.empty:
+            _latest = hist_df.iloc[0]
+            _latest_min_level = int(_latest["min_level"]) if _latest["min_level"] is not None else 1
+            _latest_merge_t = float(_latest["merge_threshold"]) if _latest["merge_threshold"] else 0.0
+            _latest_best_k = int(_latest["best_k"]) if _latest["best_k"] is not None else None
+    except Exception:
+        pass
+
+    _header_range = f"H{_latest_min_level}–H5" if _latest_min_level >= 2 else "H1–H5"
+    _h1_excluded = _latest_min_level >= 2
+
     # ── Researcher context ────────────────────────────────────────────────────
     with st.expander("📖 How these clusters were built — decisions, limitations & quality checks", expanded=True):
-        st.markdown("""
+
+        # Build the design decisions table dynamically
+        _decisions = []
+        if _h1_excluded:
+            _decisions.append(
+                "| **Exclude H1 headers** | `--min-level {lvl}` excludes H1 from clustering "
+                "| H1 is almost always the project name (e.g. \"MyTool / A Python library for…\"). "
+                "Including it creates noise clusters like \"cutadapt / sdmbench / name\" that don't "
+                "reflect documentation structure. |".format(lvl=_latest_min_level)
+            )
+        _decisions.append(
+            "| **Strip section numbers** | \"1. Installation\" → \"installation\" before embedding "
+            "| Many READMEs number their sections. Without stripping, \"1. Installation\" and "
+            "\"2. Installation\" appear as different headers and split the same concept across clusters. |"
+        )
+        _decisions.append(
+            "| **Strip emojis & shortcodes** | \"🚀 Installation\" → \"installation\", "
+            "\":pray:\" removed | Emojis and GitHub shortcodes add visual noise to headers. "
+            "Without stripping, the same concept gets different embeddings depending on emoji usage. |"
+        )
+        _decisions.append(
+            "| **Automatic k selection** | Silhouette score sweep over a k range "
+            "| Rather than fixing k manually, we sweep a range and pick the k with the highest "
+            "silhouette score — a measure of how well-separated the clusters are. |"
+        )
+        if _latest_merge_t > 0:
+            _decisions.append(
+                "| **Post-hoc merging** | `--merge-threshold {mt}` cosine similarity merge "
+                "| Even with optimal k, semantically near-identical clusters sometimes split "
+                "(e.g. \"Getting Started\" and \"Quick Start\"). Post-hoc merging computes centroid "
+                "cosine similarity and merges pairs above the threshold. |".format(mt=_latest_merge_t)
+            )
+        _decisions_table = "\n".join(_decisions)
+
+        st.markdown(f"""
 ### What is being clustered?
 
-All README section headers (H1–H5) extracted from research software repositories
+All README section headers ({_header_range}) extracted from research software repositories
 across three sources: **JOSS**, **Research Software Directory**, and **Helmholtz**.
 Each header is treated as a short text and embedded into a 384-dimensional semantic
 vector using the `all-MiniLM-L6-v2` sentence-transformer model. K-Means is then run
@@ -1074,10 +1125,7 @@ on those vectors to group semantically similar headers into clusters.
 
 | Decision | What we did | Why |
 |----------|-------------|-----|
-| **Exclude H1 headers** | `--min-level 2` excludes H1 from clustering | H1 is almost always the project name (e.g. "MyTool / A Python library for…"). Including it creates noise clusters like "cutadapt / sdmbench / name" that don't reflect documentation structure. |
-| **Strip section numbers** | "1. Installation" → "installation" before embedding | Many READMEs number their sections. Without stripping, "1. Installation" and "2. Installation" appear as different headers and split the same concept across clusters. |
-| **Automatic k selection** | Silhouette score sweep over a k range | Rather than fixing k manually, we sweep a range and pick the k with the highest silhouette score — a measure of how well-separated the clusters are. |
-| **Post-hoc merging** | `--merge-threshold` cosine similarity merge | Even with optimal k, semantically near-identical clusters sometimes split (e.g. "Getting Started" and "Quick Start"). Post-hoc merging computes centroid cosine similarity and merges pairs above the threshold. |
+{_decisions_table}
 
 ---
 
@@ -1236,6 +1284,7 @@ Before clustering, each raw header was filtered and normalised:
 - **Excluded:** headers shorter than 3 characters or longer than 120 characters
 - **Excluded:** version strings (`1.2.0`, `v1.0`), dates (`2024-01-05`), and pure digit strings
 - **Stripped:** leading section numbers ("1. Installation" → "installation")
+- **Stripped:** emojis and GitHub shortcodes (`:pray:`, `:rocket:`) before embedding
 - **Normalised:** lowercased and whitespace-trimmed
 {h1_note}
 
@@ -1331,12 +1380,19 @@ No manual labelling was applied — names reflect the dominant vocabulary in eac
 
         if best_k is not None:
             best_sil = float(k_df[k_df["is_best"]]["silhouette"].iloc[0])
+            actual_clusters = len(cluster_df)
+            merge_note = ""
+            if actual_clusters < best_k:
+                merge_note = (
+                    f" After post-hoc merging of highly similar cluster pairs, "
+                    f"the final count is **{actual_clusters}** clusters."
+                )
             st.caption(
                 f"k = **{best_k}** was selected as the value with the highest "
                 f"silhouette score ({best_sil:.4f}) across the sweep. "
                 f"Silhouette ranges from -1 (poor) to 1 (perfect separation); "
                 f"values above 0.1 indicate meaningful cluster structure for "
-                f"high-dimensional text embeddings."
+                f"high-dimensional text embeddings.{merge_note}"
             )
 
     # Filters
@@ -1383,6 +1439,19 @@ No manual labelling was applied — names reflect the dominant vocabulary in eac
                 # fallback: use stored representative headers if live query returns nothing
                 for i, header in enumerate(row["representative_headers"][:30], 1):
                     st.markdown(f"{i}. `{_clean_header_display(header)}`")
+
+    # ── References ───────────────────────────────────────────────────────────
+    st.divider()
+    st.markdown(
+        "**References**\n\n"
+        "- **Embedding model:** all-MiniLM-L6-v2 — "
+        "[Hugging Face model card](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) "
+        "· [sentence-transformers library](https://www.sbert.net/)\n"
+        "- **Clustering:** scikit-learn K-Means — "
+        "[documentation](https://scikit-learn.org/stable/modules/generated/sklearn.cluster.KMeans.html)\n"
+        "- **Dimensionality reduction (visualisation):** UMAP — "
+        "[documentation](https://umap-learn.readthedocs.io/)\n"
+    )
 
 
 def show_visualization():
@@ -1766,8 +1835,8 @@ def show_export(run_id):
 
 ### Methodology
 - **Embedding Model:** all-MiniLM-L6-v2 (384 dimensions)
-- **Clustering Algorithm:** K-Means (k=30)
-- **Distance Metric:** Euclidean distance on normalized embeddings
+- **Clustering Algorithm:** K-Means (k={len(cluster_df)})
+- **Distance Metric:** Euclidean distance on L2-normalised embeddings
 """
 
     st.markdown(summary)
