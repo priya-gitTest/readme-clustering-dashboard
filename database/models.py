@@ -162,6 +162,7 @@ class HeaderClusterAssignment(Base):
     __tablename__ = "header_cluster_assignments"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(String(50), nullable=False, index=True)  # denormalised for scoped deletes
     header_id = Column(Integer, ForeignKey("readme_headers.id", ondelete="CASCADE"), nullable=False)
     cluster_id = Column(Integer, ForeignKey("clusters.id", ondelete="CASCADE"), nullable=False)
     distance = Column(Float)  # Distance to cluster centroid
@@ -174,6 +175,7 @@ class HeaderClusterAssignment(Base):
     __table_args__ = (
         UniqueConstraint("header_id", name="uq_header_cluster"),  # One cluster per header
         Index("idx_assignment_cluster", "cluster_id"),
+        Index("idx_assignment_run_id", "run_id"),
     )
 
 

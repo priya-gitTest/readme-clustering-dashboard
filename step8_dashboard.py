@@ -919,6 +919,29 @@ def show_overview(stats):
 
 
 @st.cache_data(ttl=300)
+def load_cluster_names_for_runs(run_ids: tuple) -> dict:
+    """Return {run_id: DataFrame(name, size)} for each run_id.
+
+    Used by the Compare Cluster Contents section in Experiment History.
+    run_ids is a tuple (not list) so st.cache_data can hash it.
+    """
+    result = {}
+    try:
+        with get_session_context() as session:
+            for rid in run_ids:
+                rows = (
+                    session.query(Cluster.cluster_name, Cluster.cluster_size)
+                    .filter(Cluster.run_id == rid)
+                    .order_by(Cluster.cluster_size.desc())
+                    .all()
+                )
+                result[rid] = pd.DataFrame(rows, columns=["name", "size"])
+    except Exception:
+        pass
+    return result
+
+
+@st.cache_data(ttl=300)
 def load_experiment_history() -> "pd.DataFrame":
     """Load all AnalysisRun rows with a populated config_snapshot, newest first.
 
@@ -1048,6 +1071,90 @@ def show_experiment_history():
             st.dataframe(pd.DataFrame(merge_log), use_container_width=True)
         else:
             st.caption("No merges applied in this run.")
+
+    # ── Compare Cluster Contents ──────────────────────────────────────────────
+    st.markdown("---")
+    with st.expander("Compare Cluster Contents across runs", expanded=False):
+        if hist_df.empty or len(hist_df) < 2:
+            st.info("Run the clustering pipeline at least twice (e.g. k=30, k=45, k=60) to compare cluster contents here.")
+        else:
+            run_labels = {}
+            for _, row in hist_df.iterrows():
+                k_str = str(int(row["best_k"])) if row["best_k"] is not None else "?"
+                sil_str = f"{float(row['best_silhouette']):.4f}" if row["best_silhouette"] is not None else "?"
+                run_labels[row["run_id"]] = f"{row['run_id']}  (k={k_str}, silhouette={sil_str})"
+
+            selected_labels = st.multiselect(
+                "Select up to 3 runs to compare",
+                options=list(run_labels.values()),
+                default=list(run_labels.values())[:min(3, len(run_labels))],
+                max_selections=3,
+            )
+            selected_run_ids = [rid for rid, lbl in run_labels.items() if lbl in selected_labels]
+
+            if not selected_run_ids:
+                st.info("Select at least one run above.")
+            else:
+                # Metrics comparison table
+                st.markdown("#### Metrics comparison")
+                metric_rows = []
+                for rid in selected_run_ids:
+                    row = hist_df[hist_df["run_id"] == rid].iloc[0]
+                    metric_rows.append({
+                        "Run": run_labels[rid],
+                        "best_k": int(row["best_k"]) if row["best_k"] is not None else None,
+                        "silhouette": round(float(row["best_silhouette"]), 4) if row["best_silhouette"] is not None else None,
+                        "clusters (after merge)": int(row["n_clusters_after_merge"]) if row["n_clusters_after_merge"] is not None else None,
+                        "merges": int(row["n_merges"]) if row["n_merges"] is not None else 0,
+                    })
+                st.dataframe(pd.DataFrame(metric_rows).set_index("Run"), use_container_width=True)
+
+                # Probe pairs comparison
+                probe_data = {}
+                for rid in selected_run_ids:
+                    row = hist_df[hist_df["run_id"] == rid].iloc[0]
+                    try:
+                        snap = json.loads(row["_config_snapshot"])
+                        pairs = snap.get("outcome", {}).get("probe_pairs", [])
+                        probe_data[rid] = {p["category"]: p["same_cluster"] for p in pairs}
+                    except Exception:
+                        probe_data[rid] = {}
+
+                if any(probe_data.values()):
+                    st.markdown("#### Probe pair quality check")
+                    st.caption("✅ co-clustered  ⚠️ split  ⚪ not found")
+                    all_categories = list(dict.fromkeys(
+                        cat for d in probe_data.values() for cat in d
+                    ))
+                    probe_rows = []
+                    for cat in all_categories:
+                        probe_row = {"Pair": cat}
+                        for rid in selected_run_ids:
+                            val = probe_data[rid].get(cat)
+                            if val is True:
+                                icon = "✅"
+                            elif val is False:
+                                icon = "⚠️"
+                            else:
+                                icon = "⚪"
+                            probe_row[run_labels[rid].split("  ")[0]] = icon
+                        probe_rows.append(probe_row)
+                    st.dataframe(pd.DataFrame(probe_rows).set_index("Pair"), use_container_width=True)
+
+                # Cluster name comparison (top 30 per run)
+                st.markdown("#### Top 30 clusters by size")
+                clusters_by_run = load_cluster_names_for_runs(tuple(selected_run_ids))
+                if clusters_by_run:
+                    col_dfs = []
+                    for rid in selected_run_ids:
+                        short_label = run_labels[rid].split("  ")[0]
+                        df = clusters_by_run.get(rid, pd.DataFrame())
+                        if not df.empty:
+                            df = df.head(30).reset_index(drop=True)
+                            df.columns = [f"Cluster ({short_label})", f"Size ({short_label})"]
+                        col_dfs.append(df)
+                    combined = pd.concat(col_dfs, axis=1)
+                    st.dataframe(combined, use_container_width=True)
 
 
 def show_cluster_explorer(run_id):
