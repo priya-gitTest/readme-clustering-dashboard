@@ -718,8 +718,14 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # Load data
-    stats = load_overview_stats()
+    # Load data — gracefully degrade if DB is unreachable so static pages still work
+    _db_error = None
+    try:
+        stats = load_overview_stats()
+    except Exception as _e:
+        _db_error = _e
+        stats = {"total_repos": 0, "total_headers": 0, "total_embeddings": 0,
+                 "total_clusters": 0, "total_assignments": 0}
 
     st.sidebar.markdown("---")
     if st.sidebar.button("🔄 Refresh Data"):
@@ -727,9 +733,12 @@ def main():
         st.rerun()
 
     st.sidebar.markdown("### Dataset Statistics")
-    st.sidebar.metric("Repositories", f"{stats['total_repos']:,}")
-    st.sidebar.metric("Headers", f"{stats['total_headers']:,}")
-    st.sidebar.metric("Clusters", stats["total_clusters"])
+    if _db_error:
+        st.sidebar.warning("⚠️ DB unavailable")
+    else:
+        st.sidebar.metric("Repositories", f"{stats['total_repos']:,}")
+        st.sidebar.metric("Headers", f"{stats['total_headers']:,}")
+        st.sidebar.metric("Clusters", stats["total_clusters"])
 
     if "run_id" in stats:
         st.sidebar.markdown(f"**Run ID:** `{stats['run_id']}`")
@@ -756,7 +765,13 @@ def main():
     """)
 
     # Page routing
-    if page == "Overview":
+    # Architecture page never needs DB — always render it directly
+    if page == "Architecture":
+        show_architecture()
+        # Skip footer duplication — fall through to footer below
+    elif _db_error and page != "Architecture":
+        st.error(f"⚠️ Database unavailable: {_db_error}\n\nStatic pages (Architecture) still work — use the sidebar to navigate there.")
+    elif page == "Overview":
         show_overview(stats)
     elif page == "Cluster Explorer":
         show_cluster_explorer(stats.get("run_id"))
@@ -780,8 +795,6 @@ def main():
         show_search()
     elif page == "Export":
         show_export(stats.get("run_id"))
-    elif page == "Architecture":
-        show_architecture()
 
     # Footer
     st.markdown("---")
@@ -1075,11 +1088,11 @@ def show_experiment_history():
     # ── Compare Cluster Contents ──────────────────────────────────────────────
     st.markdown("---")
     with st.expander("Compare Cluster Contents across runs", expanded=False):
-        if hist_df.empty or len(hist_df) < 2:
+        if df.empty or len(df) < 2:
             st.info("Run the clustering pipeline at least twice (e.g. k=30, k=45, k=60) to compare cluster contents here.")
         else:
             run_labels = {}
-            for _, row in hist_df.iterrows():
+            for _, row in df.iterrows():
                 k_str = str(int(row["best_k"])) if row["best_k"] is not None else "?"
                 sil_str = f"{float(row['best_silhouette']):.4f}" if row["best_silhouette"] is not None else "?"
                 run_labels[row["run_id"]] = f"{row['run_id']}  (k={k_str}, silhouette={sil_str})"
@@ -1099,7 +1112,7 @@ def show_experiment_history():
                 st.markdown("#### Metrics comparison")
                 metric_rows = []
                 for rid in selected_run_ids:
-                    row = hist_df[hist_df["run_id"] == rid].iloc[0]
+                    row = df[df["run_id"] == rid].iloc[0]
                     metric_rows.append({
                         "Run": run_labels[rid],
                         "best_k": int(row["best_k"]) if row["best_k"] is not None else None,
@@ -1112,7 +1125,7 @@ def show_experiment_history():
                 # Probe pairs comparison
                 probe_data = {}
                 for rid in selected_run_ids:
-                    row = hist_df[hist_df["run_id"] == rid].iloc[0]
+                    row = df[df["run_id"] == rid].iloc[0]
                     try:
                         snap = json.loads(row["_config_snapshot"])
                         pairs = snap.get("outcome", {}).get("probe_pairs", [])
@@ -1148,11 +1161,11 @@ def show_experiment_history():
                     col_dfs = []
                     for rid in selected_run_ids:
                         short_label = run_labels[rid].split("  ")[0]
-                        df = clusters_by_run.get(rid, pd.DataFrame())
-                        if not df.empty:
-                            df = df.head(30).reset_index(drop=True)
-                            df.columns = [f"Cluster ({short_label})", f"Size ({short_label})"]
-                        col_dfs.append(df)
+                        run_df = clusters_by_run.get(rid, pd.DataFrame())
+                        if not run_df.empty:
+                            run_df = run_df.head(30).reset_index(drop=True)
+                            run_df.columns = [f"Cluster ({short_label})", f"Size ({short_label})"]
+                        col_dfs.append(run_df)
                     combined = pd.concat(col_dfs, axis=1)
                     st.dataframe(combined, use_container_width=True)
 
