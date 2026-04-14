@@ -105,7 +105,7 @@ class ReadmeHeader(Base):
     # Relationships
     repository = relationship("Repository", back_populates="headers")
     embedding = relationship("HeaderEmbedding", back_populates="header", uselist=False, cascade="all, delete-orphan")
-    cluster_assignment = relationship("HeaderClusterAssignment", back_populates="header", uselist=False, cascade="all, delete-orphan")
+    cluster_assignments = relationship("HeaderClusterAssignment", back_populates="header", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("idx_readme_headers_repo", "repository_id"),
@@ -169,11 +169,11 @@ class HeaderClusterAssignment(Base):
     assigned_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships
-    header = relationship("ReadmeHeader", back_populates="cluster_assignment")
+    header = relationship("ReadmeHeader", back_populates="cluster_assignments")
     cluster = relationship("Cluster", back_populates="assignments")
 
     __table_args__ = (
-        UniqueConstraint("header_id", name="uq_header_cluster"),  # One cluster per header
+        UniqueConstraint("run_id", "header_id", name="uq_header_cluster"),  # one assignment per header per run
         Index("idx_assignment_cluster", "cluster_id"),
         Index("idx_assignment_run_id", "run_id"),
     )
