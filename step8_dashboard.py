@@ -1161,12 +1161,22 @@ def show_experiment_history():
                     col_dfs = []
                     for rid in selected_run_ids:
                         short_label = run_labels[rid].split("  ")[0]
+                        name_col = f"Cluster ({short_label})"
+                        size_col = f"Size ({short_label})"
                         run_df = clusters_by_run.get(rid, pd.DataFrame())
                         if not run_df.empty:
                             run_df = run_df.head(30).reset_index(drop=True)
-                            run_df.columns = [f"Cluster ({short_label})", f"Size ({short_label})"]
+                            run_df.columns = [name_col, size_col]
+                        else:
+                            run_df = pd.DataFrame(columns=[name_col, size_col])
                         col_dfs.append(run_df)
                     combined = pd.concat(col_dfs, axis=1)
+                    # Fill NaN (from runs with different cluster counts) and
+                    # cast Size columns to object so Arrow serialises cleanly
+                    combined = combined.fillna("")
+                    for col in combined.columns:
+                        if col.startswith("Size"):
+                            combined[col] = combined[col].astype(str).replace("nan", "")
                     st.dataframe(combined, use_container_width=True)
 
 
