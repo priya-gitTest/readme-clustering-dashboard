@@ -982,7 +982,7 @@ def load_experiment_history() -> "pd.DataFrame":
                 inp = snap.get("input", {})
                 out = snap.get("outcome", {})
                 search_k = inp.get("search_k", False)
-                fixed_k_val = inp.get("n_clusters")
+                fixed_k_val = inp.get("n_clusters_requested")
                 k_selection = "sweep" if search_k else (f"fixed({fixed_k_val})" if fixed_k_val else "—")
                 min_lvl = inp.get("min_level")
                 headers_included = f"H{min_lvl}–H5" if min_lvl else "—"
