@@ -981,11 +981,18 @@ def load_experiment_history() -> "pd.DataFrame":
                     continue
                 inp = snap.get("input", {})
                 out = snap.get("outcome", {})
+                search_k = inp.get("search_k", False)
+                fixed_k_val = inp.get("n_clusters")
+                k_selection = "sweep" if search_k else (f"fixed({fixed_k_val})" if fixed_k_val else "—")
+                min_lvl = inp.get("min_level")
+                headers_included = f"H{min_lvl}–H5" if min_lvl else "—"
                 records.append(
                     {
                         "run_id": r.run_id,
                         "run_date": r.run_date,
-                        "min_level": inp.get("min_level"),
+                        "k_selection": k_selection,
+                        "headers_included": headers_included,
+                        "min_level": min_lvl,
                         "method": inp.get("method"),
                         "merge_threshold": inp.get("merge_threshold", 0.0),
                         "best_k": out.get("best_k"),
@@ -1017,10 +1024,12 @@ def show_experiment_history():
     st.markdown(f"**{len(df)} clustering run(s) recorded**")
 
     display_cols = [
-        "run_id", "run_date", "min_level", "method",
+        "run_id", "run_date", "k_selection", "headers_included",
         "merge_threshold", "best_k", "best_silhouette",
         "n_clusters_before_merge", "n_clusters_after_merge", "n_merges",
     ]
+    # Only show columns that exist (older rows may lack k_selection/headers_included)
+    display_cols = [c for c in display_cols if c in df.columns]
     fmt = {"best_silhouette": "{:.4f}", "merge_threshold": "{:.2f}"}
     st.dataframe(
         df[display_cols].style.format(fmt, na_rep="—"),
