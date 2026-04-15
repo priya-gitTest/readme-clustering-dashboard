@@ -1093,7 +1093,7 @@ def show_experiment_history():
         else:
             run_labels = {}
             for _, row in df.iterrows():
-                k_str = str(int(row["best_k"])) if row["best_k"] is not None else "?"
+                k_str = str(int(row["best_k"])) if pd.notna(row["best_k"]) else "?"
                 sil_str = f"{float(row['best_silhouette']):.4f}" if row["best_silhouette"] is not None else "?"
                 run_labels[row["run_id"]] = f"{row['run_id']}  (k={k_str}, silhouette={sil_str})"
 
@@ -1115,10 +1115,10 @@ def show_experiment_history():
                     row = df[df["run_id"] == rid].iloc[0]
                     metric_rows.append({
                         "Run": run_labels[rid],
-                        "best_k": int(row["best_k"]) if row["best_k"] is not None else None,
-                        "silhouette": round(float(row["best_silhouette"]), 4) if row["best_silhouette"] is not None else None,
-                        "clusters (after merge)": int(row["n_clusters_after_merge"]) if row["n_clusters_after_merge"] is not None else None,
-                        "merges": int(row["n_merges"]) if row["n_merges"] is not None else 0,
+                        "best_k": int(row["best_k"]) if pd.notna(row["best_k"]) else None,
+                        "silhouette": round(float(row["best_silhouette"]), 4) if pd.notna(row["best_silhouette"]) else None,
+                        "clusters (after merge)": int(row["n_clusters_after_merge"]) if pd.notna(row["n_clusters_after_merge"]) else None,
+                        "merges": int(row["n_merges"]) if pd.notna(row["n_merges"]) else 0,
                     })
                 st.dataframe(pd.DataFrame(metric_rows).set_index("Run"), use_container_width=True)
 
@@ -1306,11 +1306,11 @@ are visible in the **Experiment History** page for comparison across runs.
     if not hist_df.empty:
         def _run_label(r):
             parts = []
-            if r["min_level"] is not None:
+            if pd.notna(r["min_level"]):
                 parts.append(f"min_level={int(r['min_level'])}")
-            if r["best_k"] is not None:
+            if pd.notna(r["best_k"]):
                 parts.append(f"k={int(r['best_k'])}")
-            if r["merge_threshold"]:
+            if pd.notna(r["merge_threshold"]) and r["merge_threshold"]:
                 parts.append(f"merge={r['merge_threshold']}")
             return f"{r['run_id']}  —  {', '.join(parts)}" if parts else r["run_id"]
 
