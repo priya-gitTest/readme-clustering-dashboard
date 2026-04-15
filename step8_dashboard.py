@@ -1341,15 +1341,15 @@ are visible in the **Experiment History** page for comparison across runs.
     if selected_hist is not None:
         col1, col2, col3, col4, col5 = st.columns(5)
         min_lvl = selected_hist["min_level"]
-        col1.metric("Min level", f"H{int(min_lvl)}" if min_lvl is not None else "H1")
+        col1.metric("Min level", f"H{int(min_lvl)}" if pd.notna(min_lvl) else "H1")
         best_k_val = selected_hist["best_k"]
-        col2.metric("k (clusters)", int(best_k_val) if best_k_val is not None else "—")
+        col2.metric("k (clusters)", int(best_k_val) if pd.notna(best_k_val) else "—")
         sil = selected_hist["best_silhouette"]
-        col3.metric("Silhouette", f"{sil:.4f}" if sil is not None else "—")
+        col3.metric("Silhouette", f"{float(sil):.4f}" if pd.notna(sil) else "—")
         merge_t = selected_hist["merge_threshold"]
-        col4.metric("Merge threshold", merge_t if merge_t else "off")
+        col4.metric("Merge threshold", merge_t if pd.notna(merge_t) and merge_t else "off")
         n_merges = selected_hist["n_merges"]
-        col5.metric("Merges applied", int(n_merges) if n_merges else 0)
+        col5.metric("Merges applied", int(n_merges) if pd.notna(n_merges) else 0)
 
     # ── Methodology / rationale ──────────────────────────────────────────────
     with st.expander("ℹ️ About this analysis", expanded=True):
