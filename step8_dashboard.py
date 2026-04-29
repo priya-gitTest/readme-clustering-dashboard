@@ -1094,6 +1094,32 @@ def show_experiment_history():
         else:
             st.caption("No merges applied in this run.")
 
+        # ── Cluster browser for this run ──────────────────────────────────────
+        st.markdown("**Clusters in this run**")
+        run_clusters = load_cluster_data(selected)
+        if run_clusters.empty:
+            st.caption("No cluster data found for this run.")
+        else:
+            st.dataframe(
+                run_clusters[["name", "size"]].rename(columns={"name": "Cluster", "size": "Headers"}),
+                use_container_width=True,
+                height=300,
+            )
+            chosen_name = st.selectbox(
+                "Browse headers in cluster",
+                run_clusters["name"].tolist(),
+                key=f"cluster_pick_{selected}",
+            )
+            chosen_row = run_clusters[run_clusters["name"] == chosen_name]
+            if not chosen_row.empty:
+                cluster_db_id = int(chosen_row.iloc[0]["id"])
+                members = load_cluster_members(cluster_db_id)
+                if members:
+                    members_df = pd.DataFrame(members, columns=["Header", "Distance", "Count"])
+                    st.dataframe(members_df, use_container_width=True)
+                else:
+                    st.caption("No headers found for this cluster.")
+
     # ── Compare Cluster Contents ──────────────────────────────────────────────
     st.markdown("---")
     with st.expander("Compare Cluster Contents across runs", expanded=False):
@@ -1232,9 +1258,12 @@ def show_cluster_explorer(run_id):
             "Without stripping, the same concept gets different embeddings depending on emoji usage. |"
         )
         _decisions.append(
-            "| **Automatic k selection** | Silhouette score sweep over a k range "
-            "| Rather than fixing k manually, we sweep a range and pick the k with the highest "
-            "silhouette score — a measure of how well-separated the clusters are. |"
+            "| **Automatic k selection** | Silhouette + inertia sweep, 95% parsimony rule "
+            "| We sweep a range of k values and compute the silhouette score at each. "
+            "Rather than picking the k with the *highest* silhouette (which always biases "
+            "toward the largest k tested in high-dimensional space), we pick the "
+            "**smallest k whose silhouette is within 95% of the peak** — preferring "
+            "fewer, broader clusters unless a larger k gives meaningfully better separation. |"
         )
         if _latest_merge_t > 0:
             _decisions.append(
@@ -1265,6 +1294,15 @@ on those vectors to group semantically similar headers into clusters.
 ---
 
 ### Known limitations
+
+**No single "correct" k exists for this data**
+README headers exist on a semantic continuum — documentation topics overlap and exist
+at multiple scales simultaneously. A small k (~20–30) gives broad themes
+("Installation", "Usage"); a large k (~80–120) gives fine-grained categories
+("Docker setup", "pip install"). The parsimony rule picks the coarsest clustering
+the data supports, but this is a pragmatic choice, not a mathematical optimum.
+Silhouette scores for text embeddings in the range 0.20–0.35 indicate weak-to-moderate
+structure and are expected — scores above 0.5 are rare for diverse text.
 
 **Misspellings land in wrong clusters**
 The embedding model has no spell-correction. `ackowledgements` (missing 'n') produces
@@ -1461,6 +1499,7 @@ No manual labelling was applied — names reflect the dominant vocabulary in eac
     else:
         best_row = k_df[k_df["is_best"]].iloc[0] if k_df["is_best"].any() else None
         best_k = int(best_row["k"]) if best_row is not None else None
+        peak_k = int(k_df.loc[k_df["silhouette"].idxmax(), "k"])
 
         # Dual-axis chart: inertia (bar, left) + silhouette (line, right)
         fig = go.Figure()
@@ -1493,8 +1532,16 @@ No manual labelling was applied — names reflect the dominant vocabulary in eac
                 x=best_k,
                 line_dash="dash",
                 line_color="green",
-                annotation_text=f"Best k={best_k}",
+                annotation_text=f"Chosen k={best_k} (95% rule)",
                 annotation_position="top right",
+            )
+        if peak_k != best_k:
+            fig.add_vline(
+                x=peak_k,
+                line_dash="dot",
+                line_color="grey",
+                annotation_text=f"Peak silhouette k={peak_k}",
+                annotation_position="top left",
             )
 
         fig.update_layout(
@@ -1515,6 +1562,7 @@ No manual labelling was applied — names reflect the dominant vocabulary in eac
 
         if best_k is not None:
             best_sil = float(k_df[k_df["is_best"]]["silhouette"].iloc[0])
+            peak_sil = float(k_df["silhouette"].max())
             actual_clusters = len(cluster_df)
             merge_note = ""
             if actual_clusters < best_k:
@@ -1522,12 +1570,19 @@ No manual labelling was applied — names reflect the dominant vocabulary in eac
                     f" After post-hoc merging of highly similar cluster pairs, "
                     f"the final count is **{actual_clusters}** clusters."
                 )
+            parsimony_note = ""
+            if peak_k != best_k:
+                parsimony_note = (
+                    f" The silhouette peak is at k={peak_k} ({peak_sil:.4f}), "
+                    f"but k={best_k} already reaches 95% of that value — "
+                    f"the parsimony rule prefers fewer clusters when the gain is marginal."
+                )
             st.caption(
-                f"k = **{best_k}** was selected as the value with the highest "
-                f"silhouette score ({best_sil:.4f}) across the sweep. "
+                f"k = **{best_k}** was chosen by the 95% parsimony rule "
+                f"(silhouette={best_sil:.4f}).{parsimony_note} "
                 f"Silhouette ranges from -1 (poor) to 1 (perfect separation); "
-                f"values above 0.1 indicate meaningful cluster structure for "
-                f"high-dimensional text embeddings.{merge_note}"
+                f"values 0.2–0.4 indicate weak-to-moderate structure, which is "
+                f"typical for diverse text embeddings.{merge_note}"
             )
 
     # Filters
