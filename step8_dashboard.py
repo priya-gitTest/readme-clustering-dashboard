@@ -3256,10 +3256,9 @@ def show_gap_analysis():
                     columns={
                         "cluster_name": "Cluster",
                         "cluster_size": "Headers",
-                        "proposed_property_name": "Proposed Property",
                         "priority": "Priority",
                     }
-                )[["Cluster", "Headers", "Proposed Property", "Priority"]],
+                )[["Cluster", "Headers", "Priority"]],
                 use_container_width=True,
                 hide_index=True,
             )
