@@ -2835,13 +2835,12 @@ flowchart TD
     Validate config and DB connection"]
 
     S2PRE --> S2["Step 2 — step2_scrape_repos.py
-    Scrape GitHub · GitLab · Bitbucket · Codeberg
-    Creates analysis_run row"]
+    Scrape GitHub · GitLab · Bitbucket · Codeberg"]
 
     S2 -->|scrape succeeded| REPOS[(repositories
-    repository_history
-    analysis_runs)]
+    repository_history)]
     S2 -->|scrape failed| EXCL[(excluded_repositories)]
+    S2 -->|unsupported platform| UNSUP[(unsupported_repositories)]
 
     REPOS --> S3["Step 3 — extract_all.py
     Parse READMEs: badges · DOIs · sections"]
@@ -2862,10 +2861,11 @@ flowchart TD
 
     HDR --> S6["Step 6 — step6_clustering.py
     Sentence embeddings all-MiniLM-L6-v2
+    H2-H5 only · k-sweep via silhouette
     + sklearn K-Means clustering"]
     S6 --> CLUST[(header_embeddings
-    clusters
-    header_cluster_assignments)]
+    clusters · header_cluster_assignments
+    cluster_k_search_results · analysis_runs)]
 
     REPOS --> S7["Step 7 optional — step7_somef_validation.py
     SOMEF metadata extraction"]
@@ -2933,6 +2933,7 @@ erDiagram
     }
     header_cluster_assignments {
         int     id              PK
+        text    run_id          FK
         int     header_id       FK
         int     cluster_id      FK
         float   distance
@@ -2992,6 +2993,22 @@ erDiagram
         text    categories_found
         float   processing_time_s
     }
+    unsupported_repositories {
+        int     id              PK
+        text    url
+        text    source
+        text    host
+        text    platform
+        int     occurrence_count
+    }
+    cluster_k_search_results {
+        int     id              PK
+        text    run_id          FK
+        int     k
+        float   inertia
+        float   silhouette_score
+        bool    is_best
+    }
 
     repositories ||--o{ readme_headers              : "has headers"
     repositories ||--o|  readme_metadata             : "has metadata"
@@ -3008,6 +3025,8 @@ erDiagram
     clusters        }o--||  analysis_runs              : "created in run"
     repository_licenses }o--||  licenses               : "references"
     repository_history  }o--||  analysis_runs           : "recorded in run"
+    cluster_k_search_results }o--||  analysis_runs      : "sweep for run"
+    header_cluster_assignments }o--||  analysis_runs    : "scoped to run"
 """
 
 
