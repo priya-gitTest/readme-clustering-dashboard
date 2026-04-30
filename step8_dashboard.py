@@ -1869,6 +1869,43 @@ def show_cluster_network(run_id: str | None = None):
         edge_df = pd.DataFrame(edge_data).sort_values("Similarity", ascending=False)
         st.dataframe(edge_df, use_container_width=True, hide_index=True)
 
+    # Data-driven merge threshold explorer — shows ALL high-similarity pairs
+    # regardless of the graph threshold, so the user can pick a merge threshold
+    # based on where the natural similarity gap is, not an arbitrary default.
+    with st.expander("📊 Merge threshold explorer (data-driven)", expanded=False):
+        st.caption(
+            "All cluster pairs with similarity ≥ 0.70, sorted by similarity. "
+            "Use this to identify the natural gap before choosing a merge threshold. "
+            "Pairs above your chosen threshold would be merged into one cluster."
+        )
+        all_pairs = []
+        for i in range(len(names)):
+            for j in range(i + 1, len(names)):
+                sim = float(sim_matrix[i][j])
+                if sim >= 0.70:
+                    all_pairs.append({
+                        "Cluster A": names[i],
+                        "Cluster B": names[j],
+                        "Similarity": round(sim, 4),
+                        "Would merge at 0.85": "✅" if sim >= 0.85 else "❌",
+                        "Would merge at 0.80": "✅" if sim >= 0.80 else "❌",
+                        "Would merge at 0.75": "✅" if sim >= 0.75 else "❌",
+                    })
+        if all_pairs:
+            pairs_df = pd.DataFrame(all_pairs).sort_values("Similarity", ascending=False)
+            st.dataframe(pairs_df, use_container_width=True, hide_index=True)
+
+            # Histogram of similarity scores
+            fig_hist = px.histogram(
+                pairs_df, x="Similarity", nbins=20,
+                title="Distribution of high-similarity cluster pairs (≥ 0.70)",
+                labels={"Similarity": "Cosine Similarity", "count": "Number of Pairs"},
+            )
+            fig_hist.update_layout(height=300)
+            st.plotly_chart(fig_hist, use_container_width=True)
+        else:
+            st.info("No cluster pairs with similarity ≥ 0.70 in this run.")
+
     # Show isolated clusters (no connections)
     isolated = [names[i] for i in range(len(names)) if G.degree(i) == 0]
     if isolated:
