@@ -1146,23 +1146,48 @@ def show_experiment_history():
     st.markdown("---")
     with st.expander("Compare Cluster Contents across runs", expanded=False):
         if df.empty or len(df) < 2:
-            st.info("Run the clustering pipeline at least twice (e.g. k=30, k=45, k=60) to compare cluster contents here.")
+            st.info("Run the clustering pipeline at least twice to compare cluster contents here.")
         else:
+            # Filter by header level — silhouette scores are NOT comparable across
+            # different min_level values (H1–H5 vs H2–H5 use different corpora).
+            available_levels = sorted(df["min_level"].dropna().unique().tolist())
+            level_options = {f"H{int(l)}–H5": int(l) for l in available_levels if l is not None}
+            level_options["All (may mix incomparable runs)"] = None
+            level_filter_label = st.radio(
+                "Filter runs by header level (recommended: keep same level for valid comparison)",
+                options=list(level_options.keys()),
+                index=0,
+                horizontal=True,
+            )
+            selected_level = level_options[level_filter_label]
+            compare_df = df if selected_level is None else df[df["min_level"] == selected_level]
+
+            if selected_level is None:
+                st.warning(
+                    "Comparing runs with different header levels (H1–H5 vs H2–H5) is misleading — "
+                    "silhouette scores and cluster contents are not directly comparable."
+                )
+
             run_labels = {}
-            for _, row in df.iterrows():
+            for _, row in compare_df.iterrows():
                 k_str = str(int(row["best_k"])) if pd.notna(row["best_k"]) else "?"
-                sil_str = f"{float(row['best_silhouette']):.4f}" if row["best_silhouette"] is not None else "?"
+                sil_str = f"{float(row['best_silhouette']):.4f}" if row["best_silhouette"] is not None else "nan"
                 run_labels[row["run_id"]] = f"{row['run_id']}  (k={k_str}, silhouette={sil_str})"
 
-            selected_labels = st.multiselect(
-                "Select up to 3 runs to compare",
-                options=list(run_labels.values()),
-                default=list(run_labels.values())[:min(3, len(run_labels))],
-                max_selections=3,
-            )
-            selected_run_ids = [rid for rid, lbl in run_labels.items() if lbl in selected_labels]
+            if not run_labels:
+                st.info("No runs found for the selected header level.")
+            else:
+                selected_labels = st.multiselect(
+                    "Select up to 3 runs to compare",
+                    options=list(run_labels.values()),
+                    default=list(run_labels.values())[:min(3, len(run_labels))],
+                    max_selections=3,
+                )
+                selected_run_ids = [rid for rid, lbl in run_labels.items() if lbl in selected_labels]
 
-            if not selected_run_ids:
+            if not run_labels:
+                pass  # already handled above
+            elif not selected_run_ids:
                 st.info("Select at least one run above.")
             else:
                 # Metrics comparison table
