@@ -119,8 +119,18 @@ def load_overview_stats():
         latest_run = session.query(Cluster.run_id).order_by(Cluster.created_at.desc()).first()
         latest_run_id = latest_run[0] if latest_run else None
 
+        from sqlalchemy import text as _text, func as _func, distinct as _distinct
+        repos_with_h2 = session.execute(
+            _text("SELECT COUNT(DISTINCT repository_id) FROM readme_headers WHERE level >= 2")
+        ).scalar() or 0
+        repos_with_readme = session.execute(
+            _text("SELECT COUNT(*) FROM readme_metadata")
+        ).scalar() or 0
+
         stats = {
             "total_repos": session.query(Repository).count(),
+            "repos_with_readme": repos_with_readme,
+            "repos_contributing_headers": repos_with_h2,
             "total_headers": session.query(ReadmeHeader).count(),
             "total_embeddings": session.query(HeaderEmbedding).count(),
             # Scoped to latest run only — prevents cumulative inflation across historical runs
@@ -840,7 +850,8 @@ def show_overview(stats):
 
     with col1:
         st.metric(
-            label="Repositories Analyzed", value=f"{stats['total_repos']:,}", delta="100% coverage"
+            label="Repositories Scraped", value=f"{stats['total_repos']:,}",
+            delta=f"{stats.get('repos_contributing_headers', 0):,} contributed H2+ headings",
         )
 
     with col2:
@@ -1496,6 +1507,9 @@ are visible in the **Experiment History** page for comparison across runs.
 
 | Parameter | Value |
 |-----------|-------|
+| Repositories scraped | {stats['total_repos']:,} |
+| Repositories with parsed README | {stats.get('repos_with_readme', '—'):,} |
+| Repositories contributing H2+ headings | {stats.get('repos_contributing_headers', '—'):,} |
 | Total headers clustered | {total_headers:,} |
 | Number of clusters (k) | {total_clusters} |
 | Average cluster size | {avg_size:.0f} headers |
