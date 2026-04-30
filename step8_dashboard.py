@@ -2173,6 +2173,35 @@ def show_license_analysis():
             pct = (count / total_repos * 100) if total_repos else 0
             st.metric(category, f"{count:,}", delta=f"{pct:.1f}%")
 
+    # Show which licenses belong to each category
+    with st.expander("ℹ️ What licenses are in each category?"):
+        st.markdown("""
+| Category | Licenses included |
+|---|---|
+| **Permissive** | MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Zlib, 0BSD, Unlicense, BSL-1.0, CC0, CC-BY-3.0/4.0 |
+| **Weak Copyleft** | LGPL (all variants), MPL-2.0, CDDL, EPL, EUPL, CC-BY-SA |
+| **Strong Copyleft** | GPL-2.0, GPL-3.0, AGPL (all variants), CPAL, OSL |
+| **Other** | Custom licenses, LicenseRef-custom, WTFPL, Creative Commons on code, unrecognised identifiers |
+| **No License** | No license file detected in the repository |
+
+*Permissive licenses allow reuse with minimal restrictions. Copyleft licenses require derivative works to carry the same license. "Other" includes non-standard or unclassified identifiers.*
+        """)
+        # Show actual license → category mapping from the data
+        if not license_df.empty:
+            breakdown = (
+                license_df.groupby(["category", "license"])
+                .size()
+                .reset_index(name="count")
+                .sort_values(["category", "count"], ascending=[True, False])
+            )
+            for cat in breakdown["category"].unique():
+                cat_rows = breakdown[breakdown["category"] == cat]
+                licenses_str = ", ".join(
+                    f"{row['license']} ({row['count']})"
+                    for _, row in cat_rows.iterrows()
+                )
+                st.markdown(f"**{cat}:** {licenses_str}")
+
     st.markdown("---")
     st.download_button(
         label="Download License Report (CSV)",
