@@ -1463,6 +1463,7 @@ are visible in the **Experiment History** page for comparison across runs.
 
     # ── Methodology / rationale ──────────────────────────────────────────────
     with st.expander("ℹ️ About this analysis", expanded=True):
+        stats = load_overview_stats()
         total_headers = sum(cluster_df["size"])
         total_clusters = len(cluster_df)
         avg_size = cluster_df["size"].mean()
