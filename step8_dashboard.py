@@ -1280,14 +1280,17 @@ def show_cluster_explorer(run_id):
             "Without stripping, the same concept gets different embeddings depending on emoji usage. |"
         )
         _decisions.append(
-            "| **Automatic k selection** | Adaptive sweep with ε-rule selection "
-            "| We sweep k values and stop adaptively when silhouette improvement is below "
-            "a plateau tolerance (ε). Within the evaluated range, we select the "
-            "**smallest k whose silhouette is within ε of the peak** — the same ε used "
-            "to stop the sweep. Using one parameter for both stopping and selection "
-            "avoids an arbitrary second threshold. A sensitivity table (see K-selection "
-            "chart below) shows which k is chosen across 0.5ε–5ε, verifying the "
-            "selection is stable and not an artefact of the specific ε value. |"
+            "| **Automatic k selection** | Adaptive sweep + argmax(silhouette) "
+            "| We sweep k values and stop when silhouette improvement drops below "
+            "the plateau tolerance (ε). Within that range, we select the k with the "
+            "**highest silhouette score** (argmax) — no parsimony rule is applied. "
+            "Rationale: the plateau stopping already guarantees every step in the "
+            "evaluated range has improvement ≥ ε, so each step reflects real cluster "
+            "structure. A parsimony rule would discard genuine structure in favour of "
+            "a smaller k, which is a harmful bias when the silhouette is still rising "
+            "meaningfully. The plateau width chart (below the K-selection chart) shows "
+            "how many k values are within X% of the peak — a diagnostic for how "
+            "well-determined the optimal k is. |"
         )
         if _latest_merge_t > 0:
             _decisions.append(
@@ -1434,7 +1437,7 @@ are visible in the **Experiment History** page for comparison across runs.
             k_min_actual = int(k_df_info["k"].min())
             k_max_actual = int(k_df_info["k"].max())
             k_range_str = f"k = {k_min_actual} … {k_max_actual}"
-            k_method_str = "chosen by the 95% parsimony rule (smallest k within 5% of peak silhouette)"
+            k_method_str = "chosen as argmax of the silhouette score within the plateau-bounded sweep range"
         else:
             k_range_str = "sweep not yet recorded"
             k_method_str = "set manually"
@@ -1610,38 +1613,35 @@ No manual labelling was applied — names reflect the dominant vocabulary in eac
             if sens_data:
                 eps_pct = f"{sens_data.get('epsilon', 0.01)*100:.1f}%"
 
-            eps_note = ""
-            if peak_k != best_k:
-                eps_note = (
-                    f" The silhouette peak is at k={peak_k} ({peak_sil:.4f}), "
-                    f"but k={best_k} is the smallest k within ε={eps_pct or '1%'} of that peak — "
-                    f"preferring fewer clusters when the gain is within the stopping tolerance."
-                )
             st.caption(
-                f"k = **{best_k}** was selected as the smallest k within ε "
-                f"(= plateau tolerance{f' = {eps_pct}' if eps_pct else ''}) of the "
-                f"silhouette peak (silhouette={best_sil:.4f}).{eps_note} "
+                f"k = **{best_k}** was selected as the argmax of the silhouette score "
+                f"within the adaptively-stopped sweep range (silhouette={best_sil:.4f}). "
+                f"The sweep stopped when per-step improvement dropped below the plateau "
+                f"tolerance{f' (ε={eps_pct})' if eps_pct else ''} — so every k in the "
+                f"evaluated range represents real cluster structure, not noise. "
+                f"No parsimony rule is applied: discarding genuine structure in favour "
+                f"of a smaller k would be a harmful bias. "
                 f"Silhouette ranges from -1 (poor) to 1 (perfect separation); "
-                f"values 0.2–0.4 indicate weak-to-moderate structure, which is "
-                f"typical for diverse text embeddings.{merge_note}"
+                f"values 0.2–0.4 indicate weak-to-moderate structure, typical for "
+                f"diverse text embeddings.{merge_note}"
             )
 
-            # Sensitivity table
+            # Plateau width table (transparency, not used for selection)
             if sens_data and sens_data.get("sensitivity_table"):
-                with st.expander("Sensitivity analysis — k stability across ε range", expanded=False):
+                with st.expander("Silhouette plateau width — how flat is the peak?", expanded=False):
                     st.markdown(
-                        "Each row shows which k would be selected if ε were set to that multiple "
-                        "of the plateau tolerance. A stable selection (same k across a wide ε range) "
-                        "indicates the choice is robust and not an artefact of the specific ε value."
+                        "Shows how many k values fall within X% of the silhouette peak. "
+                        "A wide plateau (many k values with similar silhouette) means the "
+                        "exact k matters less; a sharp peak means k is well-determined. "
+                        "This is diagnostic only — argmax is always used for selection."
                     )
                     import pandas as _pd
                     sens_rows = sens_data["sensitivity_table"]
                     sens_df = _pd.DataFrame([
                         {
-                            "ε multiple": f"{r['epsilon_mult']:.1f}×",
-                            "ε value": r["epsilon_pct"],
-                            "Selected k": r["selected_k"],
-                            "Used for run": "✓" if r["is_chosen"] else "",
+                            "Within X% of peak": r["epsilon_pct"],
+                            "k range": r.get("k_range_within", "—"),
+                            "# of k values": r.get("n_k_within", "—"),
                         }
                         for r in sens_rows
                     ])
