@@ -1669,8 +1669,6 @@ No manual labelling was applied — names reflect the dominant vocabulary in eac
 def show_visualization():
     """Visualization page"""
 
-    st.info("⚠️ Loading and projecting embeddings may take a minute...")
-
     # Options
     col1, col2 = st.columns(2)
 
@@ -1683,6 +1681,7 @@ def show_visualization():
     n_components = 2 if dimensions == "2D" else 3
 
     if st.button("Generate Visualization", type="primary"):
+        notice = st.info("⚠️ Loading and projecting embeddings may take a minute...")
         with st.spinner("Loading embeddings..."):
             header_ids, embeddings, assignments = load_embeddings_for_viz(max_samples)
 
@@ -1735,6 +1734,7 @@ def show_visualization():
             fig.update_traces(marker={"size": 3, "opacity": 0.6})
 
         fig.update_layout(height=700)
+        notice.empty()  # clear the "may take a minute" banner once chart is ready
         st.plotly_chart(fig, use_container_width=True)
 
         st.success(f"✅ Visualized {len(df):,} headers across {df['cluster'].nunique()} clusters")
