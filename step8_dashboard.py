@@ -1280,12 +1280,14 @@ def show_cluster_explorer(run_id):
             "Without stripping, the same concept gets different embeddings depending on emoji usage. |"
         )
         _decisions.append(
-            "| **Automatic k selection** | Silhouette + inertia sweep, 95% parsimony rule "
-            "| We sweep a range of k values and compute the silhouette score at each. "
-            "Rather than picking the k with the *highest* silhouette (which always biases "
-            "toward the largest k tested in high-dimensional space), we pick the "
-            "**smallest k whose silhouette is within 95% of the peak** — preferring "
-            "fewer, broader clusters unless a larger k gives meaningfully better separation. |"
+            "| **Automatic k selection** | Adaptive sweep with ε-rule selection "
+            "| We sweep k values and stop adaptively when silhouette improvement is below "
+            "a plateau tolerance (ε). Within the evaluated range, we select the "
+            "**smallest k whose silhouette is within ε of the peak** — the same ε used "
+            "to stop the sweep. Using one parameter for both stopping and selection "
+            "avoids an arbitrary second threshold. A sensitivity table (see K-selection "
+            "chart below) shows which k is chosen across 0.5ε–5ε, verifying the "
+            "selection is stable and not an artefact of the specific ε value. |"
         )
         if _latest_merge_t > 0:
             _decisions.append(
@@ -1432,7 +1434,7 @@ are visible in the **Experiment History** page for comparison across runs.
             k_min_actual = int(k_df_info["k"].min())
             k_max_actual = int(k_df_info["k"].max())
             k_range_str = f"k = {k_min_actual} … {k_max_actual}"
-            k_method_str = "chosen automatically by maximising the silhouette score"
+            k_method_str = "chosen by the 95% parsimony rule (smallest k within 5% of peak silhouette)"
         else:
             k_range_str = "sweep not yet recorded"
             k_method_str = "set manually"
@@ -1554,7 +1556,7 @@ No manual labelling was applied — names reflect the dominant vocabulary in eac
                 x=best_k,
                 line_dash="dash",
                 line_color="green",
-                annotation_text=f"Chosen k={best_k} (95% rule)",
+                annotation_text=f"Chosen k={best_k} (ε-rule)",
                 annotation_position="top right",
             )
         if peak_k != best_k:
@@ -1592,20 +1594,58 @@ No manual labelling was applied — names reflect the dominant vocabulary in eac
                     f" After post-hoc merging of highly similar cluster pairs, "
                     f"the final count is **{actual_clusters}** clusters."
                 )
-            parsimony_note = ""
+            # Read sensitivity table from config_snapshot if available
+            sens_data = None
+            if selected_hist is not None:
+                snap = selected_hist.get("config_snapshot") or {}
+                if isinstance(snap, str):
+                    import json as _json
+                    try:
+                        snap = _json.loads(snap)
+                    except Exception:
+                        snap = {}
+                sens_data = (snap.get("outcome") or {}).get("parsimony_sensitivity")
+
+            eps_pct = None
+            if sens_data:
+                eps_pct = f"{sens_data.get('epsilon', 0.01)*100:.1f}%"
+
+            eps_note = ""
             if peak_k != best_k:
-                parsimony_note = (
+                eps_note = (
                     f" The silhouette peak is at k={peak_k} ({peak_sil:.4f}), "
-                    f"but k={best_k} already reaches 95% of that value — "
-                    f"the parsimony rule prefers fewer clusters when the gain is marginal."
+                    f"but k={best_k} is the smallest k within ε={eps_pct or '1%'} of that peak — "
+                    f"preferring fewer clusters when the gain is within the stopping tolerance."
                 )
             st.caption(
-                f"k = **{best_k}** was chosen by the 95% parsimony rule "
-                f"(silhouette={best_sil:.4f}).{parsimony_note} "
+                f"k = **{best_k}** was selected as the smallest k within ε "
+                f"(= plateau tolerance{f' = {eps_pct}' if eps_pct else ''}) of the "
+                f"silhouette peak (silhouette={best_sil:.4f}).{eps_note} "
                 f"Silhouette ranges from -1 (poor) to 1 (perfect separation); "
                 f"values 0.2–0.4 indicate weak-to-moderate structure, which is "
                 f"typical for diverse text embeddings.{merge_note}"
             )
+
+            # Sensitivity table
+            if sens_data and sens_data.get("sensitivity_table"):
+                with st.expander("Sensitivity analysis — k stability across ε range", expanded=False):
+                    st.markdown(
+                        "Each row shows which k would be selected if ε were set to that multiple "
+                        "of the plateau tolerance. A stable selection (same k across a wide ε range) "
+                        "indicates the choice is robust and not an artefact of the specific ε value."
+                    )
+                    import pandas as _pd
+                    sens_rows = sens_data["sensitivity_table"]
+                    sens_df = _pd.DataFrame([
+                        {
+                            "ε multiple": f"{r['epsilon_mult']:.1f}×",
+                            "ε value": r["epsilon_pct"],
+                            "Selected k": r["selected_k"],
+                            "Used for run": "✓" if r["is_chosen"] else "",
+                        }
+                        for r in sens_rows
+                    ])
+                    st.dataframe(sens_df, hide_index=True, use_container_width=False)
 
     # Filters
     col1, col2 = st.columns([2, 1])
