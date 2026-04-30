@@ -612,28 +612,41 @@ def load_cluster_similarity_matrix(run_id: str | None = None):
 def load_gap_analysis_data():
     """Load cluster_codemeta_mappings and unmapped_clusters for the Gap Analysis page."""
     with get_session_context() as session:
+        # Scope to latest run only
+        latest = session.execute(
+            text("SELECT run_id FROM clusters ORDER BY created_at DESC LIMIT 1")
+        ).fetchone()
+        run_id = latest[0] if latest else None
+
+        run_filter = "AND c.run_id = :run_id" if run_id else ""
+        params = {"run_id": run_id} if run_id else {}
+
         # ── Mapped clusters ────────────────────────────────────────────────
         mapped_rows = session.execute(
-            text("""
+            text(f"""
             SELECT c.cluster_name, c.cluster_size,
                    m.codemeta_property, m.confidence, m.mapping_method
               FROM cluster_codemeta_mappings m
               JOIN clusters c ON c.id = m.cluster_id
+             WHERE 1=1 {run_filter}
              ORDER BY c.cluster_size DESC
-        """)
+        """),
+            params,
         ).fetchall()
 
         # ── Unmapped clusters ──────────────────────────────────────────────
         unmapped_rows = session.execute(
-            text("""
+            text(f"""
             SELECT c.cluster_name, c.cluster_size,
                    u.proposed_property_name, u.priority, u.status, u.justification
               FROM unmapped_clusters u
               JOIN clusters c ON c.id = u.cluster_id
+             WHERE 1=1 {run_filter}
              ORDER BY
                  CASE u.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
                  c.cluster_size DESC
-        """)
+        """),
+            params,
         ).fetchall()
 
     mapped_df = (
