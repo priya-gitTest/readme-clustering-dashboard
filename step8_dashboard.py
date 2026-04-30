@@ -116,17 +116,26 @@ st.markdown(
 def load_overview_stats():
     """Load overview statistics"""
     with get_session_context() as session:
+        latest_run = session.query(Cluster.run_id).order_by(Cluster.created_at.desc()).first()
+        latest_run_id = latest_run[0] if latest_run else None
+
         stats = {
             "total_repos": session.query(Repository).count(),
             "total_headers": session.query(ReadmeHeader).count(),
             "total_embeddings": session.query(HeaderEmbedding).count(),
-            "total_clusters": session.query(Cluster).count(),
-            "total_assignments": session.query(HeaderClusterAssignment).count(),
+            # Scoped to latest run only — prevents cumulative inflation across historical runs
+            "total_clusters": session.query(Cluster).filter_by(run_id=latest_run_id).count()
+            if latest_run_id
+            else 0,
+            "total_assignments": session.query(HeaderClusterAssignment)
+            .filter_by(run_id=latest_run_id)
+            .count()
+            if latest_run_id
+            else 0,
         }
 
-        latest_run = session.query(Cluster.run_id).order_by(Cluster.created_at.desc()).first()
-        if latest_run:
-            stats["run_id"] = latest_run[0]
+        if latest_run_id:
+            stats["run_id"] = latest_run_id
 
     return stats
 
