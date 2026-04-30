@@ -1746,7 +1746,7 @@ def show_cluster_network(run_id: str | None = None):
 
     sim_threshold = st.slider(
         "Similarity threshold (edges shown above this value)",
-        min_value=0.3, max_value=0.95, value=0.6, step=0.05,
+        min_value=0.3, max_value=0.95, value=0.5, step=0.05,
         help="Only connections with cosine similarity above this threshold are shown.",
     )
 
