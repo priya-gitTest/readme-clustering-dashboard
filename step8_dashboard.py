@@ -256,7 +256,7 @@ def build_full_cluster_export(run_id: str) -> str:
             .order_by(Cluster.cluster_size.desc())
             .all()
         )
-        output = []
+        clusters_dict = {}
         for cl in clusters:
             rows = (
                 session.query(
@@ -270,9 +270,7 @@ def build_full_cluster_export(run_id: str) -> str:
                 .order_by(_func.count(ReadmeHeader.id).desc())
                 .all()
             )
-            output.append({
-                "run_id": run_id,
-                "cluster_name": cl.cluster_name,
+            clusters_dict[cl.cluster_name] = {
                 "cluster_size": cl.cluster_size,
                 "representative_headers": json.loads(cl.representative_headers),
                 "members": [
@@ -280,7 +278,8 @@ def build_full_cluster_export(run_id: str) -> str:
                      "distance": round(float(r.min_dist), 4) if r.min_dist is not None else None}
                     for r in rows
                 ],
-            })
+            }
+    output = {"run_id": run_id, "clusters": clusters_dict}
     return json.dumps(output, indent=2, ensure_ascii=False)
 
 
