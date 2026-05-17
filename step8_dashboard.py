@@ -1727,6 +1727,29 @@ No manual labelling was applied — names reflect the dominant vocabulary in eac
                         else ""
                     )
                     st.markdown(f"{i}. `{header_text}`{count_str}{dist_str}", unsafe_allow_html=True)
+
+                import json as _json
+                _ts = pd.Timestamp.now().strftime("%Y%m%d_%H%M")
+                _rid = run_id or "unknown"
+                _export = {
+                    "run_id": _rid,
+                    "exported_at": _ts,
+                    "cluster_name": row["name"],
+                    "cluster_size": row["size"],
+                    "representative_headers": row["representative_headers"],
+                    "members": [
+                        {"header": h, "count": c, "distance": round(float(d), 4) if d is not None else None}
+                        for h, d, c in members
+                    ],
+                }
+                _safe_name = row["name"].replace(" / ", "_").replace(" ", "_").replace(":", "")[:40]
+                st.download_button(
+                    label="Download cluster members (JSON)",
+                    data=_json.dumps(_export, indent=2, ensure_ascii=False),
+                    file_name=f"cluster_{_safe_name}_{_rid}_{_ts}.json",
+                    mime="application/json",
+                    key=f"dl_{row['id']}",
+                )
             else:
                 # fallback: use stored representative headers if live query returns nothing
                 for i, header in enumerate(row["representative_headers"][:30], 1):
