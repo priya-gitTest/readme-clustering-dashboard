@@ -246,6 +246,45 @@ def load_cluster_members(cluster_db_id: int, limit: int = 20):
 
 
 @st.cache_data(ttl=300)
+def build_full_cluster_export(run_id: str) -> str:
+    """Return a JSON string of all clusters with all member headings for the given run."""
+    with get_session_context() as session:
+        from sqlalchemy import func as _func
+        clusters = (
+            session.query(Cluster)
+            .filter_by(run_id=run_id)
+            .order_by(Cluster.cluster_size.desc())
+            .all()
+        )
+        output = []
+        for cl in clusters:
+            rows = (
+                session.query(
+                    ReadmeHeader.normalized_text,
+                    _func.min(HeaderClusterAssignment.distance).label("min_dist"),
+                    _func.count(ReadmeHeader.id).label("cnt"),
+                )
+                .join(HeaderClusterAssignment, HeaderClusterAssignment.header_id == ReadmeHeader.id)
+                .filter(HeaderClusterAssignment.cluster_id == cl.id)
+                .group_by(ReadmeHeader.normalized_text)
+                .order_by(_func.count(ReadmeHeader.id).desc())
+                .all()
+            )
+            output.append({
+                "run_id": run_id,
+                "cluster_name": cl.cluster_name,
+                "cluster_size": cl.cluster_size,
+                "representative_headers": json.loads(cl.representative_headers),
+                "members": [
+                    {"header": r.normalized_text, "count": r.cnt,
+                     "distance": round(float(r.min_dist), 4) if r.min_dist is not None else None}
+                    for r in rows
+                ],
+            })
+    return json.dumps(output, indent=2, ensure_ascii=False)
+
+
+@st.cache_data(ttl=300)
 def load_k_search_results(run_id=None):
     """Load k-selection sweep results for the given run_id (or the latest run).
     Returns an empty DataFrame if the table doesn't exist yet (pre-migration 007)."""
@@ -1461,6 +1500,16 @@ are visible in the **Experiment History** page for comparison across runs.
         n_merges = selected_hist["n_merges"]
         col5.metric("Merges applied", int(n_merges) if pd.notna(n_merges) else 0)
 
+    # ── Full cluster export ───────────────────────────────────────────────────
+    if run_id:
+        _ts = pd.Timestamp.now().strftime("%Y%m%d_%H%M")
+        st.download_button(
+            label="Download all clusters (JSON)",
+            data=build_full_cluster_export(run_id),
+            file_name=f"all_clusters_{run_id}_{_ts}.json",
+            mime="application/json",
+        )
+
     # ── Methodology / rationale ──────────────────────────────────────────────
     with st.expander("ℹ️ About this analysis", expanded=True):
         stats = load_overview_stats()
@@ -1728,28 +1777,6 @@ No manual labelling was applied — names reflect the dominant vocabulary in eac
                     )
                     st.markdown(f"{i}. `{header_text}`{count_str}{dist_str}", unsafe_allow_html=True)
 
-                import json as _json
-                _ts = pd.Timestamp.now().strftime("%Y%m%d_%H%M")
-                _rid = run_id or "unknown"
-                _export = {
-                    "run_id": _rid,
-                    "exported_at": _ts,
-                    "cluster_name": row["name"],
-                    "cluster_size": row["size"],
-                    "representative_headers": row["representative_headers"],
-                    "members": [
-                        {"header": h, "count": c, "distance": round(float(d), 4) if d is not None else None}
-                        for h, d, c in members
-                    ],
-                }
-                _safe_name = row["name"].replace(" / ", "_").replace(" ", "_").replace(":", "")[:40]
-                st.download_button(
-                    label="Download cluster members (JSON)",
-                    data=_json.dumps(_export, indent=2, ensure_ascii=False),
-                    file_name=f"cluster_{_safe_name}_{_rid}_{_ts}.json",
-                    mime="application/json",
-                    key=f"dl_{row['id']}",
-                )
             else:
                 # fallback: use stored representative headers if live query returns nothing
                 for i, header in enumerate(row["representative_headers"][:30], 1):
